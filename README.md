@@ -11,16 +11,8 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 Get the ThunderKittens-HIP repo
 ```
 git submodule update --init --recursive
-```
-
-Install Hip-Python. Make sure that the version matches that of your ROCm HIP SDK version. Something like this:
-
-```
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install --index-url https://test.pypi.org/simple "hip-python==6.3.0.540.30"
-pip install -e .
+cd ThunderKittens-HIP
+source env.src
 ```
 
 Load rocm on your gpu: 
@@ -34,19 +26,15 @@ If there are version mismatches, the kernel results will be incorrect.
 ### Directory structure
 ```
 kernels/
-    - HiP implementations of various kernels
+    - HIP and TK implementations of various kernels
 utils/
-    - helper functions for benchmarking
+    - helper functions for benchmarking or profiling
 ```
 
-### Kernels to benchmark
-So far we care about
-* Element-wise add
-* Element-wise multiply
-* Matrix Multiply
+### Usage
 
 ```bash 
-cd AMD-benchmarking-harness/kernels/TK/bf16fp32/transpose_matmul
+cd AMD-benchmarking-harness/kernels/TK/gemm/bf16fp32/mi325x/256_256_64_16/
 make 
 python test_python.py
 ```

@@ -1,3 +1,0 @@
-"Name","Calls","TotalDurationNs","AverageNs","Percentage"
-"CopyHostToDevice",33,46080007,1396363,77.77277539431788
-"CopyDeviceToHost",11,13169527,1197229,22.22722460568213
