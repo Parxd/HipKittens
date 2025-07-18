@@ -258,7 +258,7 @@ __device__ inline void load_global_to_shared_direct(
     int thread_id = threadIdx.x % N_THREADS;
 
     const int swizzle_bytes = ST::swizzle_bytes;
-    static constexpr int swizzle_repeat = swizzle_bytes << 3; // 8 threads max out the banks
+    static constexpr int swizzle_repeat = swizzle_bytes << 4; // 8 threads max out the banks
 
     #pragma unroll
     for (int i = thread_id; i < total_vecs; i += N_THREADS) {
@@ -266,7 +266,7 @@ __device__ inline void load_global_to_shared_direct(
         const int col = (i % vecs_per_row) * vec_len;
         const int global_elem_offset = (row * row_stride + col) * sizeof(T);
 
-        const int swizzle = ((global_elem_offset % swizzle_repeat) >> 7) << 4;
+        const int swizzle = ((global_elem_offset % swizzle_repeat) >> 8) << 4;
         const int final_global_elem_offset = (global_elem_offset ^ swizzle);
 
         const T* lds_base = &dst.data[0];
@@ -324,12 +324,12 @@ __device__ inline static void load_lds_reg(RT &dst, const ST &src) {
 
     int row_offset, col_offset;
     if constexpr (std::is_same_v<typename RT::layout, ducks::rt_layout::row>) {
-        row_offset = laneid%16;
-        col_offset = 8*(laneid/16);
+        row_offset = laneid%32;
+        col_offset = 8*(laneid/32);
     }
     else {
-        row_offset = 8*(laneid/16);
-        col_offset = laneid%16;
+        row_offset = 8*(laneid/32);
+        col_offset = laneid%32;
     }
     #pragma unroll
     for(int i = 0; i < dst.height; i++) {
