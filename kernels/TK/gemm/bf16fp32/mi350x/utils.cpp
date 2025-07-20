@@ -293,13 +293,13 @@ __device__ inline void load_global_to_shared_direct(
 }
 
 
-__device__ inline float4 load_shared_vec_b128(uint32_t lds_off) {
+__device__ inline float4 load_shared_vec_b128(uint32_t lds_off, uint32_t offset = 0) {
     float4 result;
     asm volatile(
-        "ds_read_b128 %0, %1\n"
-        "s_waitcnt lgkmcnt(0)\n"
+        "ds_read_b128 %0, %1 offset:%2\n"
+        // "s_waitcnt lgkmcnt(0)\n"
         : "=v"(result)              // Output: store result in float4
-        : "v"(lds_off)              // Input: LDS offset to read from
+        : "v"(lds_off), "i"(offset)              // Input: LDS offset to read from
         : "memory"
     );
     return result;
@@ -337,21 +337,31 @@ __device__ inline static void load_lds_reg(RT &dst, const ST &src) {
         row_offset = 8*(laneid/16);
         col_offset = laneid%16;
     }
+
     #pragma unroll
-    for(int i = 0; i < dst.height; i++) {
-        const int row = i*dst.tile_size_row + row_offset;
+    for(int j = 0; j < dst.width; j++) {
+        const int col = j*dst.tile_size_col + col_offset;
+        uint32_t addr = src.idx(src_ptr, {row_offset, col});
         #pragma unroll
-        for(int j = 0; j < dst.width; j++) {
-            const int col = j*dst.tile_size_col + col_offset;
+        for(int i = 0; i < dst.height; i++) {
+            const int row = i*dst.tile_size_row + row_offset;
+
             if constexpr (std::is_same_v<typename RT::layout, ducks::rt_layout::row>) { // handle the row-major layout
 
-                const int out_addr = src.idx(src_ptr, {row, col});
-                float4 loaded = load_shared_vec_b128(out_addr);
-                U2* tmp = reinterpret_cast<U2*>(&loaded);
-                dst.tiles[i][j].data[0] = base_types::convertor<T2, U2>::convert(tmp[0]);
-                dst.tiles[i][j].data[1] = base_types::convertor<T2, U2>::convert(tmp[1]);
-                dst.tiles[i][j].data[2] = base_types::convertor<T2, U2>::convert(tmp[2]);
-                dst.tiles[i][j].data[3] = base_types::convertor<T2, U2>::convert(tmp[3]);
+                // float4 loaded = load_shared_vec_b128(addr, i * ST::underlying_cols * kittens::TILE_ROW_DIM<U> * sizeof(U));
+                // U2* tmp = reinterpret_cast<U2*>(&loaded);
+                // dst.tiles[i][j].data[0] = base_types::convertor<T2, U2>::convert(tmp[0]);
+                // dst.tiles[i][j].data[1] = base_types::convertor<T2, U2>::convert(tmp[1]);
+                // dst.tiles[i][j].data[2] = base_types::convertor<T2, U2>::convert(tmp[2]);
+                // dst.tiles[i][j].data[3] = base_types::convertor<T2, U2>::convert(tmp[3]);
+
+                // avoid v_bfi_b32
+                asm volatile(
+                    "ds_read_b128 %0, %1 offset:%2\n"
+                    : "=v"(*reinterpret_cast<float4*>(&dst.tiles[i][j].data[0]))
+                    : "v"(addr), "i"(i * ST::underlying_cols * kittens::TILE_ROW_DIM<U> * sizeof(U))
+                    : "memory"
+                );
 
             }
             else { // handle the column-major layout
