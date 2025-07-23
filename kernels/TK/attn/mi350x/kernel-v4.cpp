@@ -5,9 +5,9 @@
 using namespace kittens;
 
 #define ATTN_B 16 // batch size
-#define ATTN_H 32 // number of heads
+#define ATTN_H 16 // number of heads
 #define ATTN_N 4096 // sequence length
-#define ATTN_D 128 // dimension
+#define ATTN_D 64 // dimension
 #define BLOCK_SIZE 32 // block size
 
 #define NUM_WARPS 4

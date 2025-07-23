@@ -22,9 +22,9 @@ torch.set_printoptions(
 
 # Inputs
 B = 16
-H = 32
+H = 16
 N = 4096
-D = 128
+D = 64
 causal = False
 dtype = torch.bfloat16
 q = torch.randn(B, H, N, D, dtype=dtype, device='cuda', requires_grad=True)
