@@ -73,9 +73,6 @@ __global__ void attend_ker(const attn_globals<D> g) {
     qkvo_tile<D, bf16, col_l> v_reg; // V is column layout, as we use mma_AB.
     qkvo_tile<D, float, accum_l> o_reg; // Output tile.
     attn_tile<D, float, accum_l> att_block; // attention tile, in float. (We want to use float wherever possible.)
-    // attn_tile<D, bf16, accum_l> att_block_bf16;
-    attn_tile<D, float> att_block_row;
-    attn_tile<D, bf16> att_block_row_bf16;
     typename attn_tile<D, float, accum_l>::col_vec max_vec_last_scaled, max_vec_scaled, max_vec, norm_vec; // these are column vectors for the online softmax.
 
     int tic = 0, toc = 1;
@@ -127,8 +124,10 @@ __global__ void attend_ker(const attn_globals<D> g) {
             mul(norm_vec, norm_vec, max_vec_last_scaled);
             row_sum(norm_vec, att_block, norm_vec);
             mul_row(o_reg, o_reg, max_vec_last_scaled);
-            auto att_block_row = swap_layout_inplace<row_l>(att_block); 
-            copy(att_block_row_bf16, att_block_row);
+
+            attn_tile<D, bf16, accum_l> att_block_bf16;
+            copy(att_block_bf16, att_block);  // float → bf16, same layout
+            auto& att_block_row_bf16 = swap_layout_inplace<row_l>(att_block_bf16);
 
             // O += A @ V
             mma_AB(o_reg, att_block_row_bf16, v_reg, o_reg);
@@ -161,8 +160,10 @@ __global__ void attend_ker(const attn_globals<D> g) {
         mul(norm_vec, norm_vec, max_vec_last_scaled);
         row_sum(norm_vec, att_block, norm_vec);
         mul_row(o_reg, o_reg, max_vec_last_scaled);
-        auto att_block_row = swap_layout_inplace<row_l>(att_block); 
-        copy(att_block_row_bf16, att_block_row);
+
+        attn_tile<D, bf16, accum_l> att_block_bf16;
+        copy(att_block_bf16, att_block);  // float → bf16, same layout
+        auto& att_block_row_bf16 = swap_layout_inplace<row_l>(att_block_bf16);
 
         // O += A @ V
         mma_AB(o_reg, att_block_row_bf16, v_reg, o_reg);
