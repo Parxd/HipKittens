@@ -106,32 +106,40 @@ template<> __device__ inline half_2 exp::op<half_2>(const half_2 &x) { return h2
 // template<> __device__ inline half_2 exp2::op<half_2>(const half_2 &x) { return h2exp2(x);                         }
 
 /**
- * @brief Fast base-2 exponential operation using bit-level approximation
+ * @brief Base-2 exponential operation using native hardware `v_exp_f32` (via expf)
  *
- * This implementation computes an approximate 2^x using IEEE-754 exponent manipulation.
- * It is ~1 ulp accurate and avoids expensive instructions like v_ldexp_f32.
+ * This implementation computes 2^x using the identity:
+ *    2^x = exp(x * ln(2))
+ * It maps directly to `v_exp_f32_e32` and avoids bit-level hacks,
+ * while providing smooth numerical behavior in softmax.
  *
  * @tparam T The data type of the input and output values.
  */
  struct exp2 {
-    template<typename T> static __device__ inline T op(const T &x) { return exp2f(x); }
+    template <typename T>
+    static __device__ inline T op(const T &x) {
+        return exp2f(x);  // fallback (will be specialized below)
+    }
 };
-// --- Fast approximations for float and float2 ---
-template<> __device__ inline float exp2::op<float>(const float &x) {
-    float clamped = fminf(fmaxf(x, -126.0f), 126.0f);
-    int exp_bits = static_cast<int>(clamped * (1 << 23)) + (127 << 23);
-    return __int_as_float(exp_bits);
+// Native `float` version using __expf(x * ln2) (emits v_exp_f32_e32!!!)
+template<>
+__device__ inline float exp2::op<float>(const float &x) {
+    constexpr float LN2 = 0.69314718056f;
+    float clamped = fminf(fmaxf(x, -64.0f), 88.0f);  // safe range for exp()
+    return __expf(clamped * LN2);  // maps to v_exp_f32
 }
-template<> __device__ inline float2 exp2::op<float2>(const float2 &x) {
+// Native `float2` version (emits v_exp_f32_e32!!!)
+template<>
+__device__ inline float2 exp2::op<float2>(const float2 &x) {
+    constexpr float LN2 = 0.69314718056f;
     float2 out;
-    float x0 = fminf(fmaxf(x.x, -126.0f), 126.0f);
-    float x1 = fminf(fmaxf(x.y, -126.0f), 126.0f);
-    int i0 = static_cast<int>(x0 * (1 << 23)) + (127 << 23);
-    int i1 = static_cast<int>(x1 * (1 << 23)) + (127 << 23);
-    out.x = __int_as_float(i0);
-    out.y = __int_as_float(i1);
+    float x0 = fminf(fmaxf(x.x, -64.0f), 88.0f);
+    float x1 = fminf(fmaxf(x.y, -64.0f), 88.0f);
+    out.x = __expf(x0 * LN2);
+    out.y = __expf(x1 * LN2);
     return out;
 }
+// Low-precision types use existing backend implementations
 template<> __device__ inline bf16   exp2::op<bf16>  (const bf16 &x)   { return hexp2(x);  }
 template<> __device__ inline bf16_2 exp2::op<bf16_2>(const bf16_2 &x) { return h2exp2(x); }
 template<> __device__ inline half   exp2::op<half>  (const half &x)   { return hexp2(x);  }
