@@ -184,7 +184,7 @@ if profiling:
 
     if using_aiter:
 
-        out_ref_float = out_ref[0].permute(0, 2, 1, 3).contiguous().float()
+        out_ref_float = out_ref.permute(0, 2, 1, 3).contiguous().float()
         diff = (out_float - out_ref_float)
         max_error = diff.max().item()
         mean_error = diff.mean().item()
