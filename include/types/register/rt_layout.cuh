@@ -54,6 +54,7 @@ concept all = std::is_same_v<T, row> || std::is_same_v<T, col>;
  */
 template<all L> struct transpose      { using type = col; };
 template<>      struct transpose<col> { using type = row; };
+template<>      struct transpose<accumulator> { using type = accumulator; };
 
 } // namespace rt_layout
 } // namespace ducks
