@@ -263,6 +263,19 @@ __device__ static inline void sub(T &dst, const T &lhs, const U &rhs) {
     bin_op<base_ops::sub, T>(dst, lhs, rhs);
 }
 /**
+ * @brief Computes the element-wise difference of two register vectors, using FMA.
+ *
+ * @tparam T Register vector type.
+ * @tparam U Type of the second vector.
+ * @param dst[out] Destination vector where the difference values will be stored.
+ * @param lhs[in] First vector for the difference operation.
+ * @param rhs[in] Second vector for the difference operation.
+ */
+template<ducks::rv::all T, typename U>
+__device__ static inline void sub_fma(T &dst, const T &lhs, const U &rhs) {
+    bin_op<base_ops::sub_fma, T>(dst, lhs, rhs);
+}
+/**
  * @brief Computes the element-wise product of two register vectors.
  *
  * @tparam T Register vector type.

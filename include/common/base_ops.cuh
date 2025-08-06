@@ -299,6 +299,40 @@ template<> __device__ inline bf16   mul::op<bf16>  (const bf16   &a, const bf16 
 template<> __device__ inline bf16_2 mul::op<bf16_2>(const bf16_2 &a, const bf16_2 &b) { return __hmul2(a, b);            }
 template<> __device__ inline half   mul::op<half>  (const half   &a, const half   &b) { return __hmul(a, b);             }
 template<> __device__ inline half_2 mul::op<half_2>(const half_2 &a, const half_2 &b) { return __hmul2(a, b);            }
+
+/**
+ * @brief Subtraction operation using FMA instructions with volatile to prevent optimization.
+ */
+ struct sub_fma {
+    template<typename T> static __device__ inline T op(const T &a, const T &b) { 
+        return a - b; // fallback for unspecialized types
+    }
+};
+template<> __device__ inline float sub_fma::op<float>(const float &a, const float &b) { 
+    float result;
+    asm volatile("v_fma_f32 %0, %1, 1.0, -%2" : "=v"(result) : "v"(a), "v"(b));
+    return result;
+}
+template<> __device__ inline float2 sub_fma::op<float2>(const float2 &a, const float2 &b) { 
+    float2 result;
+    asm volatile("v_fma_f32 %0, %2, 1.0, -%4\n\t"
+                 "v_fma_f32 %1, %3, 1.0, -%5" 
+                 : "=v"(result.x), "=v"(result.y) 
+                 : "v"(a.x), "v"(a.y), "v"(b.x), "v"(b.y));
+    return result;
+}
+template<> __device__ inline bf16 sub_fma::op<bf16>(const bf16 &a, const bf16 &b) { 
+    bf16 result;
+    asm volatile("v_fma_f16 %0, %1, 1.0, -%2" : "=v"(result) : "v"(a), "v"(b));
+    return result;
+}
+template<> __device__ inline bf16_2 sub_fma::op<bf16_2>(const bf16_2 &a, const bf16_2 &b) { 
+    bf16_2 result;
+    asm volatile("v_pk_fma_f16 %0, %1, 1.0, -%2" : "=v"(result) : "v"(a), "v"(b));
+    return result;
+}
+
+
 /**
  * @brief Division operation.
  *

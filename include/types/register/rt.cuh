@@ -132,4 +132,8 @@ template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row> usi
 template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row> using rt_bf = rt<bf16,  _r, _c, layout>;
 template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row> using rt_hf = rt<half,  _r, _c, layout>;
 
+#ifdef KITTENS_CDNA4
+template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row> using rt_f6 = rt<fp6_e2m3, _r, _c, layout>;
+#endif
+
 } // namespace kittens

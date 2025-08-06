@@ -635,6 +635,19 @@ __device__ static inline void sub(T &dst, const T &lhs, const U &rhs) {
     bin_map<base_ops::sub, T>(dst, lhs, rhs);
 }
 /**
+ * @brief Subtracts two tiles element-wise or subtracts a scalar from each element of a tile, using FMA.
+ *
+ * @tparam T Tile type.
+ * @tparam U Second operand type, which can be a tile or a scalar.
+ * @param dst[out] Destination tile where the result is stored.
+ * @param lhs[in] Left-hand side source tile for the subtraction.
+ * @param rhs[in] Right-hand side source tile or scalar for the subtraction.
+ */
+ template<ducks::rt::all T, typename U>
+ __device__ static inline void sub_fma(T &dst, const T &lhs, const U &rhs) {
+     bin_map<base_ops::sub_fma, T>(dst, lhs, rhs);
+ }
+/**
  * @brief Multiplies two tiles element-wise or multiplies each element of a tile by a scalar.
  *
  * @tparam T Tile type.

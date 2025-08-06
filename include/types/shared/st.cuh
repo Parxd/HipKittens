@@ -291,4 +291,8 @@ template<typename T> concept all = requires {
 template<int _height, int _width> using st_bf = st<bf16,  _height, _width>;
 template<int _height, int _width> using st_hf = st<half,  _height, _width>;
 template<int _height, int _width> using st_fl = st<float, _height, _width>;
+
+#ifdef KITTENS_CDNA4
+template<int _height, int _width> using st_f6 = st<fp6_e2m3, _height, _width>;
+#endif
 }

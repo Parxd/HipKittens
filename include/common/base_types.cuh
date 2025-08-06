@@ -15,25 +15,58 @@
 #include <string>
 #include <bit>
 
+#ifdef KITTENS_CDNA4
+#include <hip/hip_fp6.h>
+#endif
 
 namespace kittens {
 
-// /**
-//  * @brief Bfloat16 floating-point type.
-//  */
+/**
+ * @brief Bfloat16 floating-point type.
+ */
 using bf16 = __hip_bfloat16;
 /**
  * @brief Half-precision floating-point type.
  */
 using half = __half;
-// /**
-//  * @brief Packed word of two bfloat16 floating-point values.
-//  */
+/**
+ * @brief Packed word of two bfloat16 floating-point values.
+ */
 using bf16_2 = __hip_bfloat162;
 /**
  * @brief Packed word of two half-precision floating-point values.
  */
 using half_2 = __half2;
+
+
+#ifdef KITTENS_CDNA4
+// FP6 types
+/**
+ * @brief 6-bit E2M3 floating-point type.
+ */
+ using fp6_e2m3 = __hip_fp6_e2m3;
+ /**
+  * @brief 6-bit E3M2 floating-point type.
+  */
+ using fp6_e3m2 = __hip_fp6_e3m2;
+ /**
+  * @brief 2-packed 6-bit E2M3 floating-point type.
+  */
+ using fp6_e2m3_2 = __hip_fp6x2_e2m3;
+ /**
+  * @brief 2-packed 6-bit E3M2 floating-point type.
+  */
+ using fp6_e3m2_2 = __hip_fp6x2_e3m2;
+ /**
+  * @brief 4-packed 6-bit E2M3 floating-point type.
+  */
+ using fp6_e2m3_4 = __hip_fp6x4_e2m3;
+ /**
+  * @brief 4-packed 6-bit E3M2 floating-point type.
+  */
+ using fp6_e3m2_4 = __hip_fp6x4_e3m2;
+#endif
+
 
 namespace ducks {
 /**
@@ -43,10 +76,17 @@ namespace ducks {
  */
 namespace base_types {
 
+#ifdef KITTENS_CDNA4
+template<typename T>
+concept T2 = std::is_same_v<T, float2> || std::is_same_v<T, bf16_2> || std::is_same_v<T, half_2> || std::is_same_v<T, fp6_e2m3_2> || std::is_same_v<T, fp6_e3m2_2> || std::is_same_v<T, fp6_e2m3_4> || std::is_same_v<T, fp6_e3m2_4>;
+template<typename T>
+concept T1 = std::is_same_v<T, float>  || std::is_same_v<T, bf16  > || std::is_same_v<T, half> || std::is_same_v<T, fp6_e2m3> || std::is_same_v<T, fp6_e3m2>;
+#else
 template<typename T>
 concept T2 = std::is_same_v<T, float2> || std::is_same_v<T, bf16_2> || std::is_same_v<T, half_2>;
 template<typename T>
 concept T1 = std::is_same_v<T, float>  || std::is_same_v<T, bf16  > || std::is_same_v<T, half>;
+#endif
 
 } // namespace base_types
 } // namespace ducks
@@ -125,6 +165,23 @@ template<> struct constants<int2> {
     static __device__ inline constexpr int2 one()       { return int2{1, 1}; }
 };
 
+#ifdef KITTENS_CDNA4
+template<> struct constants<fp6_e2m3> {
+    static __device__ inline constexpr fp6_e2m3 zero()      { return std::bit_cast<fp6_e2m3>(uint8_t(0x00)); }
+    static __device__ inline constexpr fp6_e2m3 one()       { return std::bit_cast<fp6_e2m3>(uint8_t(0x08)); } // E2M3: exp=1, mant=0
+    static __device__ inline constexpr fp6_e2m3 pos_infty() { return std::bit_cast<fp6_e2m3>(uint8_t(0x1F)); } // max positive
+    static __device__ inline constexpr fp6_e2m3 neg_infty() { return std::bit_cast<fp6_e2m3>(uint8_t(0x3F)); } // max negative
+};
+
+template<> struct constants<fp6_e2m3_4> {
+    static __device__ inline constexpr fp6_e2m3_4 zero()      { return std::bit_cast<fp6_e2m3_4>(uint32_t(0x00000000)); }
+    static __device__ inline constexpr fp6_e2m3_4 one()       { return std::bit_cast<fp6_e2m3_4>(uint32_t(0x08080808)); }
+    static __device__ inline constexpr fp6_e2m3_4 pos_infty() { return std::bit_cast<fp6_e2m3_4>(uint32_t(0x1F1F1F1F)); }
+    static __device__ inline constexpr fp6_e2m3_4 neg_infty() { return std::bit_cast<fp6_e2m3_4>(uint32_t(0x3F3F3F3F)); }
+};
+#endif
+
+
 /**
  * @brief Provides information about packing of elements for a given type.
  *
@@ -200,6 +257,30 @@ template<> struct packing<int4> {
     static __device__ inline constexpr int num() { return 4; }
 };
 
+#ifdef KITTENS_CDNA4
+template<> struct packing<fp6_e2m3> {
+    static __device__ inline constexpr int num() { return 1; }
+    using unpacked_type = fp6_e2m3;
+    using packed_type = fp6_e2m3_4;
+};
+template<> struct packing<fp6_e2m3_4> {
+    static __device__ inline constexpr int num() { return 4; }
+    using unpacked_type = fp6_e2m3;
+    using packed_type = fp6_e2m3_4;
+};
+template<> struct packing<fp6_e3m2> {
+    static __device__ inline constexpr int num() { return 1; }
+    using unpacked_type = fp6_e3m2;
+    using packed_type = fp6_e3m2_4;
+};
+template<> struct packing<fp6_e3m2_4> {
+    static __device__ inline constexpr int num() { return 4; }
+    using unpacked_type = fp6_e3m2;
+    using packed_type = fp6_e3m2_4;
+};
+#endif
+
+
 /**
  * @brief Provides templated functionality to convert between different types.
  *
@@ -250,17 +331,6 @@ template<> struct convertor<bf16_2, float2> {
         };
     }
 };
-// template<> struct convertor<bf16_2, float2> {
-//     static __host__ __device__ inline bf16_2 convert(const float2 &u) {
-//         uint32_t result;
-//         asm volatile("v_cvt_pk_bf16_f32 %0, %1, %2" 
-//                      : "=v"(result) 
-//                      : "v"(u.x), "v"(u.y));
-//         return *reinterpret_cast<bf16_2*>(&result);
-//     }
-// };
-
-
 template<> struct convertor<float, half> {
     static __host__ __device__ inline float convert(const half & u) {
         return __half2float(u);
