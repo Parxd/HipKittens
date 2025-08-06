@@ -15,13 +15,13 @@ Mi325x:
     <img src="mi325x_attn_plot.png" height=400 alt="mi300x" style="margin-bottom:px"/> 
 </div> -->
 
-Mi350x (B=8, Q_HEADS=64, KV_HEADS=8 D=128, Causal=False):
+Mi350x (B=16, Q_HEADS=64, KV_HEADS=8 D=128, Causal=False):
 <div align="center" >
     <img src="mi350x_attn_plot.png" height=400 alt="mi300x" style="margin-bottom:px"/> 
 </div>
 
 
-Mi355x (B=8, Q_HEADS=16, KV_HEADS=8, D=128, Causal=False):
+Mi355x (B=16, Q_HEADS=16, KV_HEADS=8, D=128, Causal=False):
 <div align="center" >
     <img src="mi355x_attn_plot.png" height=400 alt="mi300x" style="margin-bottom:px"/>
 </div>
