@@ -400,6 +400,11 @@ template<> struct convertor<float2, fp6_e2m3_4> {
         return make_float2(float(vals[0]), float(vals[1]));
     }
 };
+template<> struct convertor<fp6_e2m3_4, fp6_e2m3_4> {
+    static __host__ __device__ inline fp6_e2m3_4 convert(const fp6_e2m3_4& u) {
+        return u; 
+    }
+};
 #endif
 
 

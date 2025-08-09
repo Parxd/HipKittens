@@ -42,7 +42,8 @@ __device__ inline static void load(RT &dst, const GL &src, const COORD &idx) {
     int laneid = kittens::laneid();
 
     #ifdef KITTENS_CDNA4
-    int row_offset = laneid%32, col_offset = 8*(laneid/32);
+    int packed_size = sizeof(U2) / sizeof(U);
+    int row_offset = laneid%32, col_offset = 4 * packed_size *(laneid/32);
     int REPEAT = 2;
     #else
     int row_offset = laneid%16, col_offset = 4*(laneid/16);
@@ -64,26 +65,13 @@ __device__ inline static void load(RT &dst, const GL &src, const COORD &idx) {
 
             #pragma unroll
             for(int j = 0; j < dst.width; j++) {
-                int col = dst.tile_size_col*j + col_offset + z*16;
+                int col = dst.tile_size_col*j + col_offset + z*8*packed_size;
 
                 if constexpr (sizeof(U2) == 4) { 
 
                     U2* tmp;
                     #ifdef KITTENS_CDNA4
-                    if constexpr (std::is_same_v<T2, fp6_e2m3_4>) { // fp6 case
-
-                        float4 loaded = std::bit_cast<float4>(llvm_amdgcn_raw_buffer_load_b128(
-                            std::bit_cast<i32x4>(br),
-                            (row*row_stride + col) * sizeof(U),
-                            0,
-                            0
-                        )); 
-                        tmp = reinterpret_cast<U2*>(&loaded);
-                        #pragma unroll
-                        for(int k = 0; k < 4; k++) {
-                            dst.tiles[i][j].data[k + z*4] = base_types::convertor<T2, U2>::convert(tmp[k]);
-                        }
-                    } else { // bf16_2 case
+                    if constexpr (sizeof(U2) == 4) {  // bf16_2 case and fp6 case
                         float4 loaded = std::bit_cast<float4>(llvm_amdgcn_raw_buffer_load_b128(
                             std::bit_cast<i32x4>(br),
                             (row*row_stride + col) * sizeof(U),
@@ -273,7 +261,8 @@ __device__ inline static void store(const GL &dst, const RT &src, const COORD &i
     int laneid = kittens::laneid();
 
     #ifdef KITTENS_CDNA4
-    int row_offset = laneid%32, col_offset = 8*(laneid/32);
+    int packed_size = sizeof(U2) / sizeof(U);
+    int row_offset = laneid%32, col_offset = 4 * packed_size *(laneid/32);
     int REPEAT = 2;
     #else
     int row_offset = laneid%16, col_offset = 4*(laneid/16);
@@ -288,22 +277,23 @@ __device__ inline static void store(const GL &dst, const RT &src, const COORD &i
             
             #pragma unroll
             for(int j = 0; j < src.width; j++) {
-                int col = src.tile_size_col*j + col_offset + z*16;
+                int col = src.tile_size_col*j + col_offset + z*8*packed_size;
                 #ifdef KITTENS_CDNA4
 
-                U2 tmp[4];
-                #pragma unroll
-                for(int k = 0; k < 4; k++) {
-                    tmp[k] = base_types::convertor<U2, T2>::convert(src.tiles[i][j].data[k + z*4]);
-                }
                 if constexpr (sizeof(U2) == 4) { // bf16_2
-                    if (std::is_same_v<T2, fp6_e2m3_4>) {
-                        *(bytes_8*)&dst_ptr[row*row_stride + col] = *(bytes_8*)tmp;
-                    } else {
-                        *(bytes_16*)&dst_ptr[row*row_stride + col] = *(bytes_16*)tmp;
+                    U2 tmp[4];
+                    #pragma unroll
+                    for(int k = 0; k < 4; k++) {
+                        tmp[k] = base_types::convertor<U2, T2>::convert(src.tiles[i][j].data[k + z*4]);
                     }
+                    *(bytes_16*)&dst_ptr[row*row_stride + col] = *(bytes_16*)tmp;
                 }
                 else { // float2
+                    U2 tmp[4];
+                    #pragma unroll
+                    for(int k = 0; k < 4; k++) {
+                        tmp[k] = base_types::convertor<U2, T2>::convert(src.tiles[i][j].data[k + z*4]);
+                    }
                     *(bytes_16*)&dst_ptr[row*row_stride + col] = *(bytes_16*)&tmp[0];
                     *(bytes_16*)&dst_ptr[row*row_stride + col + 4] = *(bytes_16*)&tmp[2];
                 }
