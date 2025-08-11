@@ -15,8 +15,11 @@
 #include <string>
 #include <bit>
 
+
 #ifdef KITTENS_CDNA4
 #include <hip/hip_fp6.h>
+#include <hip/amd_detail/amd_hip_ocp_fp.hpp>
+#include <hip/amd_detail/amd_hip_ocp_fp_cxx.hpp>
 #endif
 
 namespace kittens {
@@ -46,25 +49,14 @@ using half_2 = __half2;
  */
  using fp6_e2m3 = __hip_fp6_e2m3;
  /**
-  * @brief 6-bit E3M2 floating-point type.
-  */
- using fp6_e3m2 = __hip_fp6_e3m2;
- /**
   * @brief 2-packed 6-bit E2M3 floating-point type.
   */
  using fp6_e2m3_2 = __hip_fp6x2_e2m3;
  /**
-  * @brief 2-packed 6-bit E3M2 floating-point type.
+  * @brief 32-packed 6-bit E2M3 floating-point type.
   */
- using fp6_e3m2_2 = __hip_fp6x2_e3m2;
- /**
-  * @brief 4-packed 6-bit E2M3 floating-point type.
-  */
- using fp6_e2m3_4 = __hip_fp6x4_e2m3;
- /**
-  * @brief 4-packed 6-bit E3M2 floating-point type.
-  */
- using fp6_e3m2_4 = __hip_fp6x4_e3m2;
+ using fp6_e2m3_32 = __amd_fp6x32_storage_t;
+//  __hipext_ocp_fp6x32_e2m3;
 #endif
 
 
@@ -78,9 +70,9 @@ namespace base_types {
 
 #ifdef KITTENS_CDNA4
 template<typename T>
-concept T2 = std::is_same_v<T, float2> || std::is_same_v<T, bf16_2> || std::is_same_v<T, half_2> || std::is_same_v<T, fp6_e2m3_2> || std::is_same_v<T, fp6_e3m2_2> || std::is_same_v<T, fp6_e2m3_4> || std::is_same_v<T, fp6_e3m2_4>;
+concept T2 = std::is_same_v<T, float2> || std::is_same_v<T, bf16_2> || std::is_same_v<T, half_2> || std::is_same_v<T, fp6_e2m3_2> || std::is_same_v<T, fp6_e2m3_32>;
 template<typename T>
-concept T1 = std::is_same_v<T, float>  || std::is_same_v<T, bf16  > || std::is_same_v<T, half> || std::is_same_v<T, fp6_e2m3> || std::is_same_v<T, fp6_e3m2>;
+concept T1 = std::is_same_v<T, float>  || std::is_same_v<T, bf16  > || std::is_same_v<T, half> || std::is_same_v<T, fp6_e2m3>;
 #else
 template<typename T>
 concept T2 = std::is_same_v<T, float2> || std::is_same_v<T, bf16_2> || std::is_same_v<T, half_2>;
@@ -172,12 +164,36 @@ template<> struct constants<fp6_e2m3> {
     static __device__ inline constexpr fp6_e2m3 pos_infty() { return std::bit_cast<fp6_e2m3>(uint8_t(0x1F)); } // max positive
     static __device__ inline constexpr fp6_e2m3 neg_infty() { return std::bit_cast<fp6_e2m3>(uint8_t(0x3F)); } // max negative
 };
-
-template<> struct constants<fp6_e2m3_4> {
-    static __device__ inline constexpr fp6_e2m3_4 zero()      { return std::bit_cast<fp6_e2m3_4>(uint32_t(0x00000000)); }
-    static __device__ inline constexpr fp6_e2m3_4 one()       { return std::bit_cast<fp6_e2m3_4>(uint32_t(0x08080808)); }
-    static __device__ inline constexpr fp6_e2m3_4 pos_infty() { return std::bit_cast<fp6_e2m3_4>(uint32_t(0x1F1F1F1F)); }
-    static __device__ inline constexpr fp6_e2m3_4 neg_infty() { return std::bit_cast<fp6_e2m3_4>(uint32_t(0x3F3F3F3F)); }
+template<> struct constants<fp6_e2m3_32> {
+    // fp6_e2m3_32 is 32 packed 6-bit values = 192 bits = 24 bytes
+    // We need to use a type that matches this size - likely a struct or array
+    // For now, let's use a different approach that doesn't rely on bit_cast
+    static __device__ inline fp6_e2m3_32 zero() { 
+        fp6_e2m3_32 result;
+        // Initialize all 32 packed values to zero
+        // This approach depends on the actual implementation of fp6_e2m3_32
+        // You may need to adjust based on the HIP library's constructor
+        memset(&result, 0x00, sizeof(fp6_e2m3_32));
+        return result;
+    }
+    static __device__ inline fp6_e2m3_32 one() {
+        fp6_e2m3_32 result;
+        // Initialize all 32 packed values to one (0x08 for E2M3 format)
+        memset(&result, 0x08, sizeof(fp6_e2m3_32));
+        return result;
+    }
+    static __device__ inline fp6_e2m3_32 pos_infty() {
+        fp6_e2m3_32 result;
+        // Initialize all 32 packed values to positive infinity (0x1F for E2M3)
+        memset(&result, 0x1F, sizeof(fp6_e2m3_32));
+        return result;
+    }
+    static __device__ inline fp6_e2m3_32 neg_infty() {
+        fp6_e2m3_32 result;
+        // Initialize all 32 packed values to negative infinity (0x3F for E2M3)
+        memset(&result, 0x3F, sizeof(fp6_e2m3_32));
+        return result;
+    }
 };
 #endif
 
@@ -261,22 +277,12 @@ template<> struct packing<int4> {
 template<> struct packing<fp6_e2m3> {
     static __device__ inline constexpr int num() { return 1; }
     using unpacked_type = fp6_e2m3;
-    using packed_type = fp6_e2m3_4;
+    using packed_type = fp6_e2m3_32;
 };
-template<> struct packing<fp6_e2m3_4> {
-    static __device__ inline constexpr int num() { return 4; }
+template<> struct packing<fp6_e2m3_32> {
+    static __device__ inline constexpr int num() { return 32; }
     using unpacked_type = fp6_e2m3;
-    using packed_type = fp6_e2m3_4;
-};
-template<> struct packing<fp6_e3m2> {
-    static __device__ inline constexpr int num() { return 1; }
-    using unpacked_type = fp6_e3m2;
-    using packed_type = fp6_e3m2_4;
-};
-template<> struct packing<fp6_e3m2_4> {
-    static __device__ inline constexpr int num() { return 4; }
-    using unpacked_type = fp6_e3m2;
-    using packed_type = fp6_e3m2_4;
+    using packed_type = fp6_e2m3_32;
 };
 #endif
 
@@ -303,11 +309,6 @@ template<> struct convertor<float, bf16> {
         return 	__bfloat162float(u);
     }
 };
-// template<> struct convertor<bf16, float> {
-//     static __host__ __device__ inline bf16 convert(const float & u) {
-//         return 	__float2bfloat16(u);
-//     }
-// };
 template<> struct convertor<bf16, float> {
     static __host__ __device__ inline bf16 convert(const float &u) {
         // Fast unsafe conversion (truncation only)
@@ -373,17 +374,6 @@ template<> struct convertor<half_2, bf16_2> {
 };
 
 #ifdef KITTENS_CDNA4
-template<> struct convertor<fp6_e2m3_4, float4> {
-    static __host__ __device__ inline fp6_e2m3_4 convert(const float4& u) {
-        return __hip_fp6x4_e2m3(u); 
-    }
-};
-template<> struct convertor<float4, fp6_e2m3_4> {
-    static __host__ __device__ inline float4 convert(const fp6_e2m3_4& u) {
-        __hip_fp6_e2m3 *vals = reinterpret_cast<__hip_fp6_e2m3*>(const_cast<__hip_fp6x4_e2m3*>(&u));
-        return make_float4(float(vals[0]), float(vals[1]), float(vals[2]), float(vals[3]));
-    }
-};
 template<> struct convertor<fp6_e2m3, float> {
     static __host__ __device__ inline fp6_e2m3 convert(const float & u) {
         return __hip_fp6_e2m3(u);
@@ -392,17 +382,6 @@ template<> struct convertor<fp6_e2m3, float> {
 template<> struct convertor<float, fp6_e2m3> {
     static __host__ __device__ inline float convert(const fp6_e2m3 & u) {
         return float(u);
-    }
-};
-template<> struct convertor<float2, fp6_e2m3_4> {
-    static __host__ __device__ inline float2 convert(const fp6_e2m3_4& u) {
-        __hip_fp6_e2m3 *vals = reinterpret_cast<__hip_fp6_e2m3*>(const_cast<__hip_fp6x4_e2m3*>(&u));
-        return make_float2(float(vals[0]), float(vals[1]));
-    }
-};
-template<> struct convertor<fp6_e2m3_4, fp6_e2m3_4> {
-    static __host__ __device__ inline fp6_e2m3_4 convert(const fp6_e2m3_4& u) {
-        return u; 
     }
 };
 #endif

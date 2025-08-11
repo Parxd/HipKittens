@@ -500,65 +500,15 @@ __device__ static inline rt<T2, _rows, _cols, layout>& transpose_inplace(rt<T2, 
 template<typename T2, typename U2, int _height, int _width, ducks::rt_layout::all layout>
 __device__ static inline void copy(rt<T2, _height, _width, layout> &dst, const rt<U2, _height, _width, layout> &src) {
 
-    if constexpr (std::is_same_v<U2, fp6_e2m3> && std::is_same_v<T2, float>) {
-
-        int laneid = threadIdx.x % kittens::WARP_THREADS; 
-    
-        #pragma unroll
-        for(int i = 0; i < src.height; i++) {
-            #pragma unroll
-            for(int j = 0; j < src.width; j++) {
-                #pragma unroll
-                for(int k = 0; k < src.tiles[0][0].packed_per_thread; k++) {
-                    
-                    int dst_j = 4*j + k/4;
-
-                    // Put something up for adoption
-                    using fp6_4_t = std::conditional_t<std::is_same_v<U2, fp6_e2m3>, fp6_e2m3_4, fp6_e3m2_4>;
-                    fp6_4_t val = src.tiles[i][j].data[k];
-                    float4 f4 = base_types::convertor<float4, fp6_4_t>::convert(val);
-                    float2 f2_0, f2_1;
-                    if ( laneid % 4 < 2 ) { // src 0 and 1 should put up .x and .y first
-                        f2_0 = make_float2(f4.x, f4.y);
-                        f2_1 = make_float2(f4.z, f4.w);
-                    }
-                    else { // src 2 and 3 should put up .z and .w first
-                        f2_0 = make_float2(f4.z, f4.w);
-                        f2_1 = make_float2(f4.x, f4.y);
-                    }
-
-                    int row_offset = 4 * (laneid/4) + (laneid%2) * 2 + (laneid%4) / 2;
-                    float2 f2_0_shfl = packed_shfl(MASK_ALL, f2_0, row_offset);
-                    float2 f2_1_shfl = packed_shfl(MASK_ALL, f2_1, row_offset^2);
-
-                    // convert to dst type if needed
-                    using dst_t = std::conditional_t<std::is_same_v<T2, float>, float2, std::conditional_t<std::is_same_v<T2, kittens::bf16>, bf16_2, half2>>;
-                    if constexpr (!(std::is_same_v<T2, float>)) {
-
-                        dst_t f2_0_shfl_t = base_types::convertor<dst_t, float2>::convert(f2_0_shfl);
-                        dst_t f2_1_shfl_t = base_types::convertor<dst_t, float2>::convert(f2_1_shfl);
-                        if (laneid % 2 == 0) {  
-                            int storage_idx = k % 4;
-                            dst.tiles[i][dst_j].data[storage_idx + 0] = f2_0_shfl_t;
-                            dst.tiles[i][dst_j].data[storage_idx + 4] = f2_1_shfl_t;
-                        } else {
-                            int storage_idx = k % 4;
-                            dst.tiles[i][dst_j].data[storage_idx + 0] = f2_1_shfl_t;
-                            dst.tiles[i][dst_j].data[storage_idx + 4] = f2_0_shfl_t;
-                        }
-                    } else {
-                        if (laneid % 2 == 0) {  
-                            int storage_idx = k % 4; 
-                            dst.tiles[i][dst_j].data[storage_idx + 0] = f2_0_shfl;
-                            dst.tiles[i][dst_j].data[storage_idx + 4] = f2_1_shfl; 
-                        } else {
-                            int storage_idx = k % 4;
-                            dst.tiles[i][dst_j].data[storage_idx + 0] = f2_1_shfl; 
-                            dst.tiles[i][dst_j].data[storage_idx + 4] = f2_0_shfl; 
-                        }
-                    }
-                }
-            }
+    int condition = (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0);
+    if constexpr ((std::is_same_v<U2, float> && std::is_same_v<T2, fp6_e2m3>)) {
+        if (condition) {
+            printf("Copying float to fp6_e2m3\n");
+        }
+    } 
+    else if constexpr (std::is_same_v<U2, fp6_e2m3> && std::is_same_v<T2, float>) {
+        if (condition) {
+            printf("Copying fp6_e2m3 to float\n");
         }
     }
     // default case where the layouts map 1:1 in thread ownership logic
