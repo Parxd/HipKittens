@@ -287,7 +287,6 @@ __device__ inline void load_global_to_shared_direct_with_swizzled_offsets_fp6(
             for (int k = 0; k < 2; k++) {
                 asm volatile(
                     "ds_read_b96 %0, %1 offset:%2\n"
-                    "s_waitcnt lgkmcnt(0)\n"
                     : "=v"(*reinterpret_cast<__uint96_t*>((reinterpret_cast<uint8_t*>(&dst.tiles[i][j].data[0]) + k * 12)))
                     : "v"(addr),
                     "i"(i * row_stride + j * tile_stride + k * subtile_stride)
