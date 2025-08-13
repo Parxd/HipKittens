@@ -71,7 +71,7 @@ void micro_tk(const micro_globals g) {
     // Swizzle chiplet so that wgids are in the same XCD.
     wgid = (wgid % NUM_XCDS) * (NUM_WGS / NUM_XCDS) + (wgid / NUM_XCDS);
     // Swizzle for better L2 within the same XCD.
-    const int WGM = 8;
+    const int WGM = 16;
     const int num_pid_m = ceil_div(M, BLOCK_SIZE);
     const int num_pid_n = ceil_div(N, BLOCK_SIZE);
     int num_wgid_in_group = WGM * num_pid_n;
@@ -101,7 +101,6 @@ void micro_tk(const micro_globals g) {
     uint32_t swizzled_offsets_A[memcpy_per_tile];
     prefill_swizzled_offsets_fp6<2, false, rt_f6<REG_BLOCK_M, DOT_SLICE>, st_f6<BLOCK_SIZE, K_STEP>, _gl_A, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row, 0}, As[tic], swizzled_offsets_A);
     prefill_swizzled_offsets_fp6<2, false, rt_f6<REG_BLOCK_M, DOT_SLICE>, st_f6<BLOCK_SIZE, K_STEP>, _gl_B, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col, 0}, Bs[tic], swizzled_offsets_B);
-    __builtin_amdgcn_s_barrier();
 
     // Load first tile into shared memory
     load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<BLOCK_SIZE, K_STEP>, _gl_A, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row, 0}, As[tic], swizzled_offsets_A);
@@ -117,10 +116,10 @@ void micro_tk(const micro_globals g) {
     for (int tile = 0; tile < num_tiles - 1; ++tile, tic^=1, toc^=1) {
 
         // Cluster 0
-        load_lds_reg_row_fp6(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 0}));
         load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<BLOCK_SIZE, K_STEP>, _gl_A, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row, tile+1}, As[toc], swizzled_offsets_A);
         load_lds_reg_row_fp6(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 0}));
         load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<BLOCK_SIZE, K_STEP>, _gl_B, coord<st_f6<BLOCK_SIZE, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col, tile+1}, Bs[toc], swizzled_offsets_B);
+        load_lds_reg_row_fp6(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 0}));
         __builtin_amdgcn_s_barrier();
 
         // Cluster 1
@@ -161,7 +160,6 @@ void micro_tk(const micro_globals g) {
     __builtin_amdgcn_s_barrier();
 
     // Cluster 2 (load)
-    __builtin_amdgcn_s_barrier();
     load_lds_reg_row_fp6(B_tile, subtile_inplace<REG_BLOCK_N, DOT_SLICE>(Bs[tic], {warp_col, 1}));
     load_lds_reg_row_fp6(A_tile, subtile_inplace<REG_BLOCK_M, DOT_SLICE>(As[tic], {warp_row, 1}));
     __builtin_amdgcn_s_barrier();
@@ -328,12 +326,16 @@ int main() {
     int errors = 0;
     int num_printed = 0;
     int num_printed_correct = 0;
+    float max_diff = 0.0f;
+    float total_diff = 0.0f;
     for (int i = 0; i < M * N; i++) {
         float h_output_float = float(h_output[i]);
         const float rtol = 0.1f;   // ~u with a little margin
         const float atol = 1e-2f;   // floor for tiny expected values
         float diff = fabs(cpu_result[i] - h_output_float);
         float threshold = rtol * fabs(cpu_result[i]) + atol;
+        max_diff = std::max(max_diff, diff);
+        total_diff += diff;
         if (diff > threshold) {
             ++errors;
             if (num_printed < 5) {
@@ -355,8 +357,10 @@ int main() {
             }
         }
     }
-    
-    std::cout << "\nErrors: " << errors << "/" << (M * N) << std::endl;
+
+    std::cout << "Average diff: " << total_diff / (M * N) << std::endl;
+    std::cout << "Max diff: " << max_diff << std::endl;
+    std::cout << "Errors: " << errors << "/" << (M * N) << std::endl;
     if (errors < 100) {
         std::cout << "GEMM test PASSED" << std::endl;
     } else {
