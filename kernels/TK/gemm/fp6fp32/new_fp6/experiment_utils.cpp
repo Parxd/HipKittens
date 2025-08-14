@@ -291,7 +291,7 @@ __device__ inline void load_global_to_shared_direct_with_swizzled_offsets_fp6(
 
             asm volatile(
                 "ds_read_b128 %0, %2 offset:%3\n"
-                "ds_read_b64 %1, %2 offset:%4"
+                "ds_read_b64 %1, %2 offset:%4\n"
                 : "=v"(*reinterpret_cast<__uint128_t*>(&dst.tiles[i][j].data[0])),
                   "=v"(*reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(&dst.tiles[i][j].data[0]) + 16))
                 : "v"(addr),
@@ -300,7 +300,7 @@ __device__ inline void load_global_to_shared_direct_with_swizzled_offsets_fp6(
                 : "memory"
             );
         }
-     }
+    }
  }
 
  template<int axis, ducks::rt::row_layout RT, ducks::gl::all GL, ducks::coord::tile COORD=coord<RT>>
