@@ -237,39 +237,36 @@ TimingResult matmul_ref(const std::vector<fp8e4m3>& a, const std::vector<fp8e4m3
 
 template <int M, int N, int K>
 __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m3, 1, 1, M, K> A, const kittens::gl<fp8e4m3, 1, 1, N, K> B, const kittens::gl<float, 1, 1, M, N> C) {
-    // Each threadblock computes 256x256 output tile
     constexpr int WARPS_COL = 2;
     constexpr int WARPS_ROW = 4;
     constexpr int NUM_WARPS = WARPS_COL * WARPS_ROW;
     constexpr int BLOCK_SIZE_ROW = 256;
     constexpr int BLOCK_SIZE_COL = 256;
     constexpr int BLOCK_K = 128;
-    constexpr int blocks_per_row = M / BLOCK_SIZE_ROW; // Number of blocks per matrix row
-    constexpr int blocks_per_col = N / BLOCK_SIZE_COL; // Number of blocks per matrix col
-    constexpr int total_blocks_needed = blocks_per_row * blocks_per_col; // Total blocks needed
+    constexpr int k_step = BLOCK_K;
+    constexpr int blocks_row = M / BLOCK_SIZE_ROW; // Number of blocks along output matrix row dim
+    constexpr int blocks_col = N / BLOCK_SIZE_COL; // Number of blocks along output matrix col dim
+    constexpr int total_blocks_needed = blocks_row * blocks_col;
     constexpr int k_iters = K / BLOCK_K; // K iterations
 
-    // Shared memory tiles: 128x64 for A and B
     __shared__ st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K> As[2];
     __shared__ st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K> Bs[2];
 
-    // Register tiles: 64x64 per warp
-    rt_fp8e4m3<BLOCK_SIZE_ROW / WARPS_ROW, BLOCK_K> a;
-    rt_fp8e4m3<BLOCK_SIZE_COL / WARPS_COL, BLOCK_K> b;
+    rt_fp8e4m3<BLOCK_SIZE_ROW / WARPS_ROW, k_step> a;
+    rt_fp8e4m3<BLOCK_SIZE_COL / WARPS_COL, k_step> b;
     rt_fl<BLOCK_SIZE_ROW / WARPS_ROW, BLOCK_SIZE_COL / WARPS_COL, kittens::ducks::rt_layout::accumulator> c;
 
-    // Calculate which block this threadblock should work on
     int global_block_id = blockIdx.x;
 
     // Convert linear block ID to 2D coordinates
-    int block_row = global_block_id / blocks_per_col;
-    int block_col = global_block_id % blocks_per_col;
+    int block_row = global_block_id / blocks_col;
+    int block_col = global_block_id % blocks_col;
     int block_m = block_row * BLOCK_SIZE_ROW;
     int block_n = block_col * BLOCK_SIZE_COL;
 
-    // Warp arrangement within threadblock: 4x2 warps covering 256x256
-    int warp_m = (warpid() / WARPS_COL); // warp row: 0 to 3
-    int warp_n = (warpid() % WARPS_COL); // warp col: 0 to 1
+    // Warp arrangement within threadblock
+    int warp_m = (warpid() / WARPS_COL);
+    int warp_n = (warpid() % WARPS_COL);
 
     zero(c);
 
@@ -289,17 +286,15 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
 
     // Inner loop over K dimension
     for (int k = 0; k < k_iters - 1; k++, curr ^= 1, next ^= 1) {
-        // Cooperatively load 128x64 tiles into shared memory
-        // All 4 warps participate in loading
         __builtin_amdgcn_s_waitcnt(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
         load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, M, K>, coord<st<fp8e4m3, BLOCK_SIZE_ROW, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(As[next], A, {0, 0, block_row, k + 1});
         load<2, false, kittens::ducks::rt_layout::row, st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>, kittens::gl<fp8e4m3, 1, 1, N, K>, coord<st<fp8e4m3, BLOCK_SIZE_COL, BLOCK_K>>, NUM_WARPS*WARP_THREADS>(Bs[next], B, {0, 0, block_col, k + 1});
-        auto as_subtile = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, BLOCK_K>(As[curr], {warp_m, 0});
+        auto as_subtile = kittens::subtile_inplace<BLOCK_SIZE_ROW / WARPS_ROW, k_step>(As[curr], {warp_m, 0});
         load(a, as_subtile);
-        auto bs_subtile = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, BLOCK_K>(Bs[curr], {warp_n, 0});
+        auto bs_subtile = kittens::subtile_inplace<BLOCK_SIZE_COL / WARPS_COL, k_step>(Bs[curr], {warp_n, 0});
         load(b, bs_subtile);
 
         __builtin_amdgcn_s_waitcnt(0);
@@ -334,6 +329,7 @@ TimingResult matmul_host(const std::vector<fp8e4m3>& a, const std::vector<fp8e4m
     constexpr int threads_per_warp = 64;
     constexpr int warps_per_cu = 8;
     constexpr int threads_per_block = threads_per_warp * warps_per_cu;
+    constexpr int threadblocks = 1024;
     
     // Ensure input vectors have correct size
     if (a.size() != M * K) {
@@ -370,7 +366,7 @@ TimingResult matmul_host(const std::vector<fp8e4m3>& a, const std::vector<fp8e4m
     // Warmup iterations
     for (int i = 0; i < warmup_iters; i++) {
         hipMemset(d_c, 0, M*N*sizeof(float));
-        matmul_device<M, N, K><<<1024, threads_per_block>>>(A, B, C);
+        matmul_device<M, N, K><<<threadblocks, threads_per_block>>>(A, B, C);
         HipCheckError();
         hipDeviceSynchronize();
     }
@@ -386,7 +382,7 @@ TimingResult matmul_host(const std::vector<fp8e4m3>& a, const std::vector<fp8e4m
     for (int r = 0; r < timing_iters; ++r) {
         hipMemset(d_c, 0, M*N*sizeof(float));
         hipEventRecord(start_event, 0);
-        matmul_device<M, N, K><<<1024, threads_per_block>>>(A, B, C);
+        matmul_device<M, N, K><<<threadblocks, threads_per_block>>>(A, B, C);
         hipEventRecord(stop_event, 0);
         hipEventSynchronize(stop_event);
         float ms = 0.0f;
