@@ -184,6 +184,18 @@ __device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::accu
                                         const rt_base<float, ducks::rt_layout::accumulator> &c) {
     mfma323216(d.data, a.data, b.data, c.data);
 }
+__device__ static inline void mma_AtB_accum_base(rt_base<float, ducks::rt_layout::accumulator> &d,
+                                        const rt_base<half, ducks::rt_layout::accumulator> &a,
+                                        const rt_base<half, ducks::rt_layout::accumulator> &b, // in col-major mode
+                                        const rt_base<float, ducks::rt_layout::accumulator> &c) {
+    mfma323216(d.data, a.data, b.data, c.data);
+}
+__device__ static inline void mma_AtB_accum_base(rt_base<float, ducks::rt_layout::accumulator> &d,
+                                        const rt_base<bf16, ducks::rt_layout::accumulator> &a,
+                                        const rt_base<bf16, ducks::rt_layout::accumulator> &b, // in col-major mode
+                                        const rt_base<float, ducks::rt_layout::accumulator> &c) {
+    mfma323216(d.data, a.data, b.data, c.data);
+}
 #else
 __device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::col> &d,
                                      const rt_base<half, ducks::rt_layout::col> &a,
@@ -405,6 +417,47 @@ __device__ static inline void mma_AtB(D &d,
         }
     }
 }
+
+#ifdef KITTENS_CDNA4
+template<ducks::rt::accumulator_layout D, ducks::rt::accumulator_layout A, ducks::rt::accumulator_layout B, ducks::rt::accumulator_layout C>
+__device__ static inline void mma_AtB_accum(D &d,
+                                const A &a,
+                                const B &b,
+                                const C &c) {
+    static_assert(D::rows == A::cols && D::cols == B::cols); // Check D matches A, B
+    static_assert(A::rows == B::rows); // Check reduction dim is same
+    static_assert(D::rows == C::rows && D::cols == C::cols); // Check D matches C
+
+    static_assert(
+        (std::is_same_v<typename D::T, float> && std::is_same_v<typename A::T, bf16> &&
+            std::is_same_v<typename B::T, bf16> && std::is_same_v<typename C::T, float>) ||
+        (std::is_same_v<typename D::T, half> && std::is_same_v<typename A::T, half> &&
+            std::is_same_v<typename B::T, half> && std::is_same_v<typename C::T, half>)
+    );
+
+    #pragma unroll
+    for(int n = 0; n < D::height; n++) {
+        #pragma unroll
+        for(int m = 0; m < D::width; m++) {
+            mma_AtB_accum_base(
+                d.tiles[n][m],
+                a.tiles[0][n],
+                b.tiles[0][m],
+                c.tiles[n][m]
+            );
+            #pragma unroll
+            for(int k = 1; k < A::height; k++) {
+                mma_AtB_accum_base(
+                    d.tiles[n][m],
+                    a.tiles[k][n],
+                    b.tiles[k][m],
+                    d.tiles[n][m]
+                );
+            }
+        }
+    }
+}
+#endif
 
 /**
  * @brief Matrix multiply-accumulate operation with transposed A and B.
