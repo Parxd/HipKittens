@@ -28,11 +28,14 @@ template<typename op, ducks::rv::all V, ducks::rt::row_layout T, bool reset>
 __device__ static inline void row_reduce(V &row_accum, const T &src, const V &src_accum) {
     // I actually like these static asserts because they give more verbose errors when things go wrong.
     static_assert(std::is_same_v<typename V::layout, typename rt_base<typename T::T, typename T::layout>::col_vec_layout>); // compatible layout
-    static_assert(std::is_same_v<typename V::dtype, typename T::dtype>); // compatible type
+    static_assert(std::is_same_v<typename V::T2, typename T::dtype>); // compatible type
     static_assert(V::outer_dim == T::height); // compatible size
 
+    using dtype = T::dtype;
     using RT2 = V::dtype;
     using RT = base_types::packing<RT2>::unpacked_type;
+
+    int condition = (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0);
 
     #ifdef KITTENS_CDNA4
     const int leader = laneid() % 32;
@@ -42,16 +45,16 @@ __device__ static inline void row_reduce(V &row_accum, const T &src, const V &sr
 
     #pragma unroll
     for(int i = 0; i < src.height; i++) {
-        RT2 accum_packed = src.tiles[i][0].data[0];
+        dtype accum_packed = src.tiles[i][0].data[0];
         for (int k = 1; k < src.packed_per_tile; k++) {
-            accum_packed = op::template op<RT2>(accum_packed, src.tiles[i][0].data[k]);
+            accum_packed = op::template op<dtype>(accum_packed, src.tiles[i][0].data[k]);
         }
 
         #pragma unroll
         for(int j = 1; j < src.width; j++) {
             #pragma unroll
             for (int k = 0; k < src.packed_per_tile; k++) {
-                accum_packed = op::template op<RT2>(accum_packed, src.tiles[i][j].data[k]);
+                accum_packed = op::template op<dtype>(accum_packed, src.tiles[i][j].data[k]);
             }
         }
         RT accum_single = op::template op<RT>(accum_packed.x, accum_packed.y);
@@ -65,14 +68,14 @@ __device__ static inline void row_reduce(V &row_accum, const T &src, const V &sr
         #endif
 
         if(reset) {
-            row_accum[i][0].x = accum_single;
+            row_accum[i][0] = accum_single;
         }
         else {
-            row_accum[i][0].x = op::template op<RT>(src_accum[i][0].x, accum_single);
+            row_accum[i][0] = op::template op<RT>(src_accum[i][0], accum_single);
         }
 
-        row_accum[i][0].x = packed_shfl(MASK_ALL, row_accum[i][0].x, leader);
-        row_accum[i][0].y = row_accum[i][0].x;
+        row_accum[i][0] = packed_shfl(MASK_ALL, row_accum[i][0], leader);
+        row_accum[i][0] = row_accum[i][0];
     }
 }
 /**
