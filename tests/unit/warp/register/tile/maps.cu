@@ -2,6 +2,14 @@
 
 #ifdef TEST_WARP_REGISTER_TILE_MAPS
 
+#ifdef KITTENS_CDNA4
+#define ROWS 32
+#define COLS 32
+#else
+#define ROWS 16
+#define COLS 16
+#endif
+
 struct test_exp {
     template<int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
     static inline const std::string test_identifier = "reg_exp";
@@ -9,7 +17,7 @@ struct test_exp {
         for(int i = 0; i < i_ref.size(); i++) o_ref[i] = ::expf(i_ref[i]);
     }
     template<int H, int W, int NW, kittens::ducks::gl::all GL, kittens::ducks::rt_layout::all L> __device__ static void device_func(const GL input, const GL output) {
-        kittens::rt_bf<32*H, 32*W, L> reg_tile;
+        kittens::rt_bf<ROWS*H, COLS*W, L> reg_tile;
         kittens::load(reg_tile, input, {});
         kittens::exp(reg_tile, reg_tile);
         kittens::store(output, reg_tile, {});
