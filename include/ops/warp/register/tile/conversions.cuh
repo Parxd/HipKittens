@@ -24,158 +24,167 @@ namespace kittens {
  * @param src[in] Reference to the source register base tile to be swapped.
  */
  #ifdef KITTENS_CDNA4
-template<typename T, ducks::rt_layout::accum layout>
-__device__ inline void swap_layout(rt_base<T, typename ducks::rt_layout::col> &dst, const rt_base<T, layout> &src) {
-    
-    if constexpr (std::is_same_v<T, bf16>) {
-        uint32_t* src_ptr = (uint32_t*)&src.data[0];
-        uint32_t* dst_ptr = (uint32_t*)&dst.data[0];
-        
-        // Load source values
-        uint32_t temp0 = src_ptr[0], temp1 = src_ptr[1], temp2 = src_ptr[2], temp3 = src_ptr[3];
-        uint32_t temp4 = src_ptr[4], temp5 = src_ptr[5], temp6 = src_ptr[6], temp7 = src_ptr[7];
-        
-        // Try using single calls with immediate access to avoid bound_ctrl
-        // This should generate e32 instead of e64
-        dst_ptr[0] = __builtin_amdgcn_permlane32_swap(temp0, temp2, false, false)[0];
-        dst_ptr[1] = __builtin_amdgcn_permlane32_swap(temp1, temp3, false, false)[0];
-        dst_ptr[4] = __builtin_amdgcn_permlane32_swap(temp4, temp6, false, false)[0];
-        dst_ptr[5] = __builtin_amdgcn_permlane32_swap(temp5, temp7, false, false)[0];
-        
-        // For the second elements, use the swap result from the same lanes but different element
-        dst_ptr[2] = __builtin_amdgcn_permlane32_swap(temp0, temp2, false, false)[1];
-        dst_ptr[3] = __builtin_amdgcn_permlane32_swap(temp1, temp3, false, false)[1];
-        dst_ptr[6] = __builtin_amdgcn_permlane32_swap(temp4, temp6, false, false)[1];
-        dst_ptr[7] = __builtin_amdgcn_permlane32_swap(temp5, temp7, false, false)[1];
-    }
-    else {
-        // Keep original for other types
- 
-         T src_tmp[16] = {
-             src.data[0].x, src.data[0].y,
-             src.data[1].x, src.data[1].y,
-             src.data[2].x, src.data[2].y,
-             src.data[3].x, src.data[3].y,
-             src.data[4].x, src.data[4].y,
-             src.data[5].x, src.data[5].y,
-             src.data[6].x, src.data[6].y,
-             src.data[7].x, src.data[7].y,
-         };
- 
-         T dst_tmp[16];
+template<ducks::rt_layout::all layout1, typename T, ducks::rt_layout::all layout2>
+__device__ inline void swap_layout(rt_base<T, layout1> &dst, const rt_base<T, layout2> &src) {
+
+    // same layout
+    if constexpr (std::is_same_v<layout1, layout2>) { // just a simple copy
         #pragma unroll
-        for(int k = 0; k < 8; k++) {
-            const int kk = (k / 4) * 8 + (k % 4);
-            if constexpr (std::is_same_v<T, float>) {
-                uint2_t res = __builtin_amdgcn_permlane32_swap(__float_as_uint(src_tmp[kk]), __float_as_uint(src_tmp[kk + 4]), false, true);
-                dst_tmp[kk] = __uint_as_float(res.x);
-                dst_tmp[kk + 4] = __uint_as_float(res.y);
+        for(int i = 0; i < dst.packed_per_thread; i++) {
+            dst.data[i] = src.data[i];
+        }
+    }
+    // accumulator <-> regular
+    else if constexpr (std::is_same_v<layout1, typename ducks::rt_layout::shuffle<layout2>::type>) {
+        if constexpr (std::is_same_v<T, bf16>) {
+            uint32_t* src_ptr = (uint32_t*)&src.data[0];
+            uint32_t* dst_ptr = (uint32_t*)&dst.data[0];
+            
+            // Load source values
+            uint32_t temp0 = src_ptr[0], temp1 = src_ptr[1], temp2 = src_ptr[2], temp3 = src_ptr[3];
+            uint32_t temp4 = src_ptr[4], temp5 = src_ptr[5], temp6 = src_ptr[6], temp7 = src_ptr[7];
+            
+            // Try using single calls with immediate access to avoid bound_ctrl
+            // This should generate e32 instead of e64
+            dst_ptr[0] = __builtin_amdgcn_permlane32_swap(temp0, temp2, false, false)[0];
+            dst_ptr[1] = __builtin_amdgcn_permlane32_swap(temp1, temp3, false, false)[0];
+            dst_ptr[4] = __builtin_amdgcn_permlane32_swap(temp4, temp6, false, false)[0];
+            dst_ptr[5] = __builtin_amdgcn_permlane32_swap(temp5, temp7, false, false)[0];
+            
+            // For the second elements, use the swap result from the same lanes but different element
+            dst_ptr[2] = __builtin_amdgcn_permlane32_swap(temp0, temp2, false, false)[1];
+            dst_ptr[3] = __builtin_amdgcn_permlane32_swap(temp1, temp3, false, false)[1];
+            dst_ptr[6] = __builtin_amdgcn_permlane32_swap(temp4, temp6, false, false)[1];
+            dst_ptr[7] = __builtin_amdgcn_permlane32_swap(temp5, temp7, false, false)[1];
+        }
+        else {
+            // Keep original for other types
+    
+            T src_tmp[16] = {
+                src.data[0].x, src.data[0].y,
+                src.data[1].x, src.data[1].y,
+                src.data[2].x, src.data[2].y,
+                src.data[3].x, src.data[3].y,
+                src.data[4].x, src.data[4].y,
+                src.data[5].x, src.data[5].y,
+                src.data[6].x, src.data[6].y,
+                src.data[7].x, src.data[7].y,
+            };
+    
+            T dst_tmp[16];
+            #pragma unroll
+            for(int k = 0; k < 8; k++) {
+                const int kk = (k / 4) * 8 + (k % 4);
+                if constexpr (std::is_same_v<T, float>) {
+                    uint2_t res = __builtin_amdgcn_permlane32_swap(__float_as_uint(src_tmp[kk]), __float_as_uint(src_tmp[kk + 4]), false, true);
+                    dst_tmp[kk] = __uint_as_float(res.x);
+                    dst_tmp[kk + 4] = __uint_as_float(res.y);
+                }
+                else if constexpr (std::is_same_v<T, half>) {
+                    uint2_t res = __builtin_amdgcn_permlane32_swap(__half_as_ushort(src_tmp[kk]), __half_as_ushort(src_tmp[kk + 4]), false, true);
+                    dst_tmp[kk] = __ushort_as_half(res.x);
+                    dst_tmp[kk + 4] = __ushort_as_half(res.y);
+                }
             }
-            else if constexpr (std::is_same_v<T, half>) {
-                uint2_t res = __builtin_amdgcn_permlane32_swap(__half_as_ushort(src_tmp[kk]), __half_as_ushort(src_tmp[kk + 4]), false, true);
-                dst_tmp[kk] = __ushort_as_half(res.x);
-                dst_tmp[kk + 4] = __ushort_as_half(res.y);
+            memcpy(&dst.data[0], &dst_tmp[0], sizeof(dst.data));
+        }
+    }
+    // row <-> col
+    else if constexpr ((std::is_same_v<layout2, ducks::rt_layout::row> || std::is_same_v<layout2, ducks::rt_layout::col>) && std::is_same_v<layout1, typename ducks::rt_layout::transpose<layout2>::type>) {
+        int lane = laneid();
+
+        int to_flip = ((lane % 32) / 16) * 8;
+        int or_not_to_flip = ((lane % 32) / 16) * 16;
+        int block_src_trans = 32*((lane%16)/8) + 8*(lane/32); 
+        int block_offset = lane%8; 
+    
+        T src_tmp[16] = {
+            src.data[0].x, src.data[0].y,
+            src.data[1].x, src.data[1].y,
+            src.data[2].x, src.data[2].y,
+            src.data[3].x, src.data[3].y,
+            src.data[4].x, src.data[4].y,
+            src.data[5].x, src.data[5].y,
+            src.data[6].x, src.data[6].y,
+            src.data[7].x, src.data[7].y,
+        };
+    
+        T dst_tmp[16];
+        #pragma unroll
+        for(int k = 0; k < 16; k++) {
+            int that_is_the_question = (k / 8) * 24;
+            if constexpr (std::is_same_v<T, bf16>) {
+                dst_tmp[block_offset^k^to_flip] = __float2bfloat16(__shfl(__bfloat162float(src_tmp[block_offset^k^to_flip]), (block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question)));
+            }
+            else {
+                dst_tmp[block_offset^k^to_flip] = __shfl(src_tmp[block_offset^k^to_flip], block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question);
             }
         }
+    
+        dst.data[0].x = dst_tmp[0];
+        dst.data[0].y = dst_tmp[1];
+        dst.data[1].x = dst_tmp[2];
+        dst.data[1].y = dst_tmp[3];
+        dst.data[2].x = dst_tmp[4];
+        dst.data[2].y = dst_tmp[5];
+        dst.data[3].x = dst_tmp[6];
+        dst.data[3].y = dst_tmp[7];
+        dst.data[4].x = dst_tmp[8];
+        dst.data[4].y = dst_tmp[9];
+        dst.data[5].x = dst_tmp[10];
+        dst.data[5].y = dst_tmp[11];
+        dst.data[6].x = dst_tmp[12];
+        dst.data[6].y = dst_tmp[13];
+        dst.data[7].x = dst_tmp[14];
+        dst.data[7].y = dst_tmp[15];
+    }
+    // shuffle(transpose(accumulator))
+    else if constexpr ((std::is_same_v<layout2, ducks::rt_layout::accumulator_col> || std::is_same_v<layout2, ducks::rt_layout::accumulator_row>) && std::is_same_v<layout1, typename ducks::rt_layout::shuffle<typename ducks::rt_layout::transpose<layout2>::type>::type>) {
+        const int lane = laneid();
+
+        int block_src_trans = 32*((lane%8)/4) + 8*(lane/32); 
+        int thread_offset = lane % 4;
+        int block_offset = ((lane % 16) / 8) * 4;
+        int send_offset = ((lane % 8) / 4) * 4;
+        int to_flip = ((lane % 32) / 16) * 8;
+        int or_not_to_flip = ((lane % 32) / 16) * 16;
+        
+    
+        T src_tmp[16] = {
+            src.data[0].x, src.data[0].y,
+            src.data[1].x, src.data[1].y,
+            src.data[2].x, src.data[2].y,
+            src.data[3].x, src.data[3].y,
+            src.data[4].x, src.data[4].y,
+            src.data[5].x, src.data[5].y,
+            src.data[6].x, src.data[6].y,
+            src.data[7].x, src.data[7].y,
+        };
+    
+        T dst_tmp[16];
+        #pragma unroll
+        for(int k = 0; k < 16; k++) {
+            if constexpr (std::is_same_v<T, bf16>) {
+                int that_is_the_question = (k / 8) * 24;
+                int setting = thread_offset^block_offset^k^to_flip;
+                int sending = thread_offset^send_offset^k^to_flip;
+                int from = block_src_trans + thread_offset^block_offset^k^or_not_to_flip^that_is_the_question;
+                dst_tmp[setting] = __float2bfloat16(__shfl(__bfloat162float(src_tmp[sending]), from));
+            }
+            else {
+                int that_is_the_question = (k / 8) * 24;
+                int setting = thread_offset^block_offset^k^to_flip;
+                int sending = thread_offset^send_offset^k^to_flip;
+                int from = block_src_trans + thread_offset^block_offset^k^or_not_to_flip^that_is_the_question;
+                dst_tmp[setting] = __shfl(src_tmp[sending], from);
+            }
+        }
+        
         memcpy(&dst.data[0], &dst_tmp[0], sizeof(dst.data));
     }
-}
-
-  template<typename T, ducks::rt_layout::accum layout>
- __device__ inline void swap_layout(rt_base<T, typename ducks::rt_layout::row> &dst, const rt_base<T, layout> &src) {
-    const int lane = laneid();
-
-    int block_src_trans = 32*((lane%8)/4) + 8*(lane/32); 
-    int thread_offset = lane % 4;
-    int block_offset = ((lane % 16) / 8) * 4;
-    int send_offset = ((lane % 8) / 4) * 4;
-    int to_flip = ((lane % 32) / 16) * 8;
-    int or_not_to_flip = ((lane % 32) / 16) * 16;
-    
-
-    T src_tmp[16] = {
-        src.data[0].x, src.data[0].y,
-        src.data[1].x, src.data[1].y,
-        src.data[2].x, src.data[2].y,
-        src.data[3].x, src.data[3].y,
-        src.data[4].x, src.data[4].y,
-        src.data[5].x, src.data[5].y,
-        src.data[6].x, src.data[6].y,
-        src.data[7].x, src.data[7].y,
-    };
-
-    T dst_tmp[16];
-    #pragma unroll
-    for(int k = 0; k < 16; k++) {
-        if constexpr (std::is_same_v<T, bf16>) {
-            int that_is_the_question = (k / 8) * 24;
-            int setting = thread_offset^block_offset^k^to_flip;
-            int sending = thread_offset^send_offset^k^to_flip;
-            int from = block_src_trans + thread_offset^block_offset^k^or_not_to_flip^that_is_the_question;
-            dst_tmp[setting] = __float2bfloat16(__shfl(__bfloat162float(src_tmp[sending]), from));
-        }
-        else {
-            int that_is_the_question = (k / 8) * 24;
-            int setting = thread_offset^block_offset^k^to_flip;
-            int sending = thread_offset^send_offset^k^to_flip;
-            int from = block_src_trans + thread_offset^block_offset^k^or_not_to_flip^that_is_the_question;
-            dst_tmp[setting] = __shfl(src_tmp[sending], from);
-        }
+    else {
+        static_assert(false, "Unsupported layout swap");
     }
-
-    memcpy(&dst.data[0], &dst_tmp[0], sizeof(dst.data));
- }
- #endif
-
-#ifdef KITTENS_CDNA4
-template<typename T, ducks::rt_layout::classic layout>
-__device__ inline void swap_layout(rt_base<T, typename ducks::rt_layout::transpose<layout>::type> &dst, const rt_base<T, layout> &src) {
-    int lane = laneid();
-
-    int to_flip = ((lane % 32) / 16) * 8;
-    int or_not_to_flip = ((lane % 32) / 16) * 16;
-    int block_src_trans = 32*((lane%16)/8) + 8*(lane/32); 
-    int block_offset = lane%8; 
-
-    T src_tmp[16] = {
-        src.data[0].x, src.data[0].y,
-        src.data[1].x, src.data[1].y,
-        src.data[2].x, src.data[2].y,
-        src.data[3].x, src.data[3].y,
-        src.data[4].x, src.data[4].y,
-        src.data[5].x, src.data[5].y,
-        src.data[6].x, src.data[6].y,
-        src.data[7].x, src.data[7].y,
-    };
-
-    T dst_tmp[16];
-    #pragma unroll
-    for(int k = 0; k < 16; k++) {
-        int that_is_the_question = (k / 8) * 24;
-        if constexpr (std::is_same_v<T, bf16>) {
-            dst_tmp[block_offset^k^to_flip] = __float2bfloat16(__shfl(__bfloat162float(src_tmp[block_offset^k^to_flip]), (block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question)));
-        }
-        else {
-            dst_tmp[block_offset^k^to_flip] = __shfl(src_tmp[block_offset^k^to_flip], block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question);
-        }
-    }
-
-    dst.data[0].x = dst_tmp[0];
-    dst.data[0].y = dst_tmp[1];
-    dst.data[1].x = dst_tmp[2];
-    dst.data[1].y = dst_tmp[3];
-    dst.data[2].x = dst_tmp[4];
-    dst.data[2].y = dst_tmp[5];
-    dst.data[3].x = dst_tmp[6];
-    dst.data[3].y = dst_tmp[7];
-    dst.data[4].x = dst_tmp[8];
-    dst.data[4].y = dst_tmp[9];
-    dst.data[5].x = dst_tmp[10];
-    dst.data[5].y = dst_tmp[11];
-    dst.data[6].x = dst_tmp[12];
-    dst.data[6].y = dst_tmp[13];
-    dst.data[7].x = dst_tmp[14];
-    dst.data[7].y = dst_tmp[15];
 }
 #else
 template<typename T, ducks::rt_layout::all layout>
@@ -222,8 +231,8 @@ __device__ inline void swap_layout(rt_base<T, typename ducks::rt_layout::transpo
  * @param src[in] Reference to the source register tile to be swapped.
  */
 #ifdef KITTENS_CDNA4
-template<typename T2, int _height, int _width, ducks::rt_layout::accum layout>
-__device__ static inline void swap_layout(rt<T2, _height, _width, typename ducks::rt_layout::col> &dst, const rt<T2, _height, _width, layout> &src) {
+template<ducks::rt_layout::all layout1, typename T2, int _height, int _width, ducks::rt_layout::all layout2>
+__device__ static inline void swap_layout(rt<T2, _height, _width, layout1> &dst, const rt<T2, _height, _width, layout2> &src) {
 
     #pragma unroll
     for(int i = 0; i < dst.height; i++) {
@@ -233,25 +242,8 @@ __device__ static inline void swap_layout(rt<T2, _height, _width, typename ducks
         }
     }
 }
-
-template<typename T2, int _height, int _width, ducks::rt_layout::accum layout>
-__device__ static inline void swap_layout(rt<T2, _height, _width, typename ducks::rt_layout::row> &dst, const rt<T2, _height, _width, layout> &src) {
-
-    #pragma unroll
-    for(int i = 0; i < dst.height; i++) {
-        #pragma unroll
-        for(int j = 0; j < dst.width; j++) {
-            swap_layout(dst.tiles[i][j], src.tiles[i][j]);
-        }
-    }
-}
-#endif
-
-#ifdef KITTENS_CDNA4
-template<typename T2, int _height, int _width, ducks::rt_layout::classic layout>
 #else
 template<typename T2, int _height, int _width, ducks::rt_layout::all layout>
-#endif
 __device__ static inline void swap_layout(rt<T2, _height, _width, typename ducks::rt_layout::transpose<layout>::type> &dst, const rt<T2, _height, _width, layout> &src) {
 
     #pragma unroll
@@ -262,6 +254,7 @@ __device__ static inline void swap_layout(rt<T2, _height, _width, typename ducks
         }
     }
 }
+#endif
 
 /**
  * @brief Swaps the layout of a register base tile in place.
@@ -275,30 +268,21 @@ __device__ static inline void swap_layout(rt<T2, _height, _width, typename ducks
  * @return A reference to the swapped register base tile.
  */
 #ifdef KITTENS_CDNA4
-template<typename T2, ducks::rt_layout::classic layout>
+template<ducks::rt_layout::all layout1, typename T2, ducks::rt_layout::all layout2>
+__device__ inline rt_base<T2, layout1>& swap_layout_inplace(const rt_base<T2, layout2> &src) {
+    rt_base<T2, layout1> &dst = *(rt_base<T2, layout1>*)(&src);
+    swap_layout(dst, src);
+    return dst;
+}
 #else
 template<typename T2, ducks::rt_layout::all layout>
-#endif
 __device__ inline rt_base<T2, typename ducks::rt_layout::transpose<layout>::type>& swap_layout_inplace(const rt_base<T2, layout> &src) {
     rt_base<T2, typename ducks::rt_layout::transpose<layout>::type> &dst = *(rt_base<T2, typename ducks::rt_layout::transpose<layout>::type>*)(&src);
     swap_layout(dst, src);
     return dst;
 }
-
-#ifdef KITTENS_CDNA4
-template<typename DesiredLayout, typename T2, ducks::rt_layout::accum layout>
-__device__ inline rt_base<T2, DesiredLayout>& swap_layout_inplace(const rt_base<T2, layout> &src) {
-    rt_base<T2, DesiredLayout> &dst = *(rt_base<T2, DesiredLayout>*)(&src);
-    swap_layout(dst, src);
-    return dst;
-}
-template<typename DstT, typename SrcT, ducks::rt_layout::accum layout>
-__device__ inline rt_base<DstT, typename ducks::rt_layout::row>& swap_layout_inplace_copy(const rt_base<SrcT, layout> &src) {
-    rt_base<DstT, typename ducks::rt_layout::row> &dst = *(rt_base<DstT, typename ducks::rt_layout::row>*)(&src);
-    swap_layout_copy(dst, src);
-    return dst;
-}
 #endif
+
 /**
  * @brief Swaps the layout of a register tile in place.
  *
@@ -313,10 +297,19 @@ __device__ inline rt_base<DstT, typename ducks::rt_layout::row>& swap_layout_inp
  * @return A reference to the swapped register tile.
  */
 #ifdef KITTENS_CDNA4
-template<typename T2, int _rows, int _cols, ducks::rt_layout::classic layout>
+template<ducks::rt_layout::all layout1, typename T2, int _rows, int _cols, ducks::rt_layout::all layout2>
+__device__ static inline rt<T2, _rows, _cols, layout1>& swap_layout_inplace(rt<T2, _rows, _cols, layout2> &tile) {
+    #pragma unroll
+    for(int i = 0; i < tile.height; i++) {
+        #pragma unroll
+        for(int j = 0; j < tile.width; j++) {
+            swap_layout_inplace<layout1>(tile.tiles[i][j]);
+        }
+    }
+    return *(rt<T2, _rows, _cols, layout1>*)(&tile);
+}
 #else
 template<typename T2, int _rows, int _cols, ducks::rt_layout::all layout>
-#endif
 __device__ static inline rt<T2, _rows, _cols, typename ducks::rt_layout::transpose<layout>::type>& swap_layout_inplace(rt<T2, _rows, _cols, layout> &tile) {
     #pragma unroll
     for(int i = 0; i < tile.height; i++) {
@@ -326,31 +319,6 @@ __device__ static inline rt<T2, _rows, _cols, typename ducks::rt_layout::transpo
         }
     }
     return *(rt<T2, _rows, _cols, typename ducks::rt_layout::transpose<layout>::type>*)(&tile);
-}
-
-#ifdef KITTENS_CDNA4
-template<typename DesiredLayout, typename T2, int _rows, int _cols, ducks::rt_layout::accum layout>
-__device__ static inline rt<T2, _rows, _cols, DesiredLayout>& swap_layout_inplace(rt<T2, _rows, _cols, layout> &tile) {
-    #pragma unroll
-    for(int i = 0; i < tile.height; i++) {
-        #pragma unroll
-        for(int j = 0; j < tile.width; j++) {
-            swap_layout_inplace<DesiredLayout>(tile.tiles[i][j]);
-        }
-    }
-    return *(rt<T2, _rows, _cols, DesiredLayout>*)(&tile);
-}
-
-template<typename DstT, typename SrcT, int _rows, int _cols, ducks::rt_layout::accum layout>
-__device__ static inline rt<DstT, _rows, _cols, typename ducks::rt_layout::row>& swap_layout_inplace_copy(rt<SrcT, _rows, _cols, layout> &tile) {
-    #pragma unroll
-    for(int i = 0; i < tile.height; i++) {
-        #pragma unroll
-        for(int j = 0; j < tile.width; j++) {
-            swap_layout_inplace_copy<DstT, SrcT>(tile.tiles[i][j]);
-        }
-    }
-    return *(rt<DstT, _rows, _cols, typename ducks::rt_layout::row>*)(&tile);
 }
 #endif
 
@@ -365,55 +333,60 @@ __device__ static inline rt<DstT, _rows, _cols, typename ducks::rt_layout::row>&
  * @param src[in] Reference to the register base tile to be transposed.
  */
 #ifdef KITTENS_CDNA4
-template<typename T, ducks::rt_layout::classic layout>
+template<typename T, ducks::rt_layout::all layout>
 __device__ inline void transpose(rt_base<T, layout> &dst, const rt_base<T, layout> &src) {
     int lane = laneid();
 
-    int to_flip = ((lane % 32) / 16) * 8;
-    int or_not_to_flip = ((lane % 32) / 16) * 16;
-    int block_src_trans = 32*((lane%16)/8) + 8*(lane/32); 
-    int block_offset = lane%8; 
+    if constexpr (std::is_same_v<layout, ducks::rt_layout::col> || std::is_same_v<layout, ducks::rt_layout::row>) {
+        int to_flip = ((lane % 32) / 16) * 8;
+        int or_not_to_flip = ((lane % 32) / 16) * 16;
+        int block_src_trans = 32*((lane%16)/8) + 8*(lane/32); 
+        int block_offset = lane%8; 
 
-    T src_tmp[16] = {
-        src.data[0].x, src.data[0].y,
-        src.data[1].x, src.data[1].y,
-        src.data[2].x, src.data[2].y,
-        src.data[3].x, src.data[3].y,
-        src.data[4].x, src.data[4].y,
-        src.data[5].x, src.data[5].y,
-        src.data[6].x, src.data[6].y,
-        src.data[7].x, src.data[7].y,
-    };
+        T src_tmp[16] = {
+            src.data[0].x, src.data[0].y,
+            src.data[1].x, src.data[1].y,
+            src.data[2].x, src.data[2].y,
+            src.data[3].x, src.data[3].y,
+            src.data[4].x, src.data[4].y,
+            src.data[5].x, src.data[5].y,
+            src.data[6].x, src.data[6].y,
+            src.data[7].x, src.data[7].y,
+        };
 
-    T dst_tmp[16];
-    #pragma unroll
-    for(int k = 0; k < 16; k++) {
-        int that_is_the_question = (k / 8) * 24;
-        if constexpr (std::is_same_v<T, bf16>) {
-            dst_tmp[block_offset^k^to_flip] = __float2bfloat16(__shfl(__bfloat162float(src_tmp[block_offset^k^to_flip]), (block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question)));
-            // printf("Thread: %d, Setting: %d, Sending: %d, From: %d\n", lane, block_offset^k^to_flip, block_offset^k^to_flip, block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question);
+        T dst_tmp[16];
+        #pragma unroll
+        for(int k = 0; k < 16; k++) {
+            int that_is_the_question = (k / 8) * 24;
+            if constexpr (std::is_same_v<T, bf16>) {
+                dst_tmp[block_offset^k^to_flip] = __float2bfloat16(__shfl(__bfloat162float(src_tmp[block_offset^k^to_flip]), (block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question)));
+                // printf("Thread: %d, Setting: %d, Sending: %d, From: %d\n", lane, block_offset^k^to_flip, block_offset^k^to_flip, block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question);
+            }
+            else {
+                dst_tmp[block_offset^k^to_flip] = __shfl(src_tmp[block_offset^k^to_flip], block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question);
+            }
         }
-        else {
-            dst_tmp[block_offset^k^to_flip] = __shfl(src_tmp[block_offset^k^to_flip], block_src_trans + block_offset^k^or_not_to_flip^that_is_the_question);
-        }
+
+        dst.data[0].x = dst_tmp[0];
+        dst.data[0].y = dst_tmp[1];
+        dst.data[1].x = dst_tmp[2];
+        dst.data[1].y = dst_tmp[3];
+        dst.data[2].x = dst_tmp[4];
+        dst.data[2].y = dst_tmp[5];
+        dst.data[3].x = dst_tmp[6];
+        dst.data[3].y = dst_tmp[7];
+        dst.data[4].x = dst_tmp[8];
+        dst.data[4].y = dst_tmp[9];
+        dst.data[5].x = dst_tmp[10];
+        dst.data[5].y = dst_tmp[11];
+        dst.data[6].x = dst_tmp[12];
+        dst.data[6].y = dst_tmp[13];
+        dst.data[7].x = dst_tmp[14];
+        dst.data[7].y = dst_tmp[15];
     }
-
-    dst.data[0].x = dst_tmp[0];
-    dst.data[0].y = dst_tmp[1];
-    dst.data[1].x = dst_tmp[2];
-    dst.data[1].y = dst_tmp[3];
-    dst.data[2].x = dst_tmp[4];
-    dst.data[2].y = dst_tmp[5];
-    dst.data[3].x = dst_tmp[6];
-    dst.data[3].y = dst_tmp[7];
-    dst.data[4].x = dst_tmp[8];
-    dst.data[4].y = dst_tmp[9];
-    dst.data[5].x = dst_tmp[10];
-    dst.data[5].y = dst_tmp[11];
-    dst.data[6].x = dst_tmp[12];
-    dst.data[6].y = dst_tmp[13];
-    dst.data[7].x = dst_tmp[14];
-    dst.data[7].y = dst_tmp[15];
+    else {
+        static_assert(false, "Unsupported layout transpose");
+    }
 }
 #else
 template<typename T, ducks::rt_layout::all layout>

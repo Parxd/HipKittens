@@ -53,7 +53,21 @@ struct transpose_wrapper_2d {
 template<typename test, int MAX_H=8, int MAX_W=8, int NUM_WORKERS=1, typename... args> using transpose_sweep_size = loop_h<transpose_wrapper_2d, test, MAX_H, MAX_W, NUM_WORKERS, MAX_H, args...>;
 template<typename test, int MAX_H=8, int MAX_W=8, typename... args> using transpose_sweep_size_warp = transpose_sweep_size<test, MAX_H, MAX_W, 1, args...>;
 
-
+#ifdef KITTENS_CDNA4
+struct test_swap_layout {
+    template<int H, int W, int NW, kittens::ducks::rt_layout::all L1, kittens::ducks::rt_layout::all L2> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
+    static inline const std::string test_identifier = "reg_swaplayout";
+    template<int H, int W, int NW, gl_t GL, kittens::ducks::rt_layout::all L1, kittens::ducks::rt_layout::all L2> __host__ static void host_func(const std::vector<float> &i_ref, std::vector<float> &o_ref) {
+        o_ref = i_ref; // overwrite the whole thing
+    }
+    template<int H, int W, int NW, gl_t GL, kittens::ducks::rt_layout::all L1, kittens::ducks::rt_layout::all L2> __device__ static void device_func(const GL input, const GL output) {
+        kittens::rt_bf<ROWS*H, COLS*W, L1> reg_tile;
+        kittens::load(reg_tile, input, {});
+        auto &reg_tile_other_layout = kittens::swap_layout_inplace<L2>(reg_tile);
+        kittens::store(output, reg_tile_other_layout, {});
+    }
+};
+#else
 struct test_swap_layout {
     template<int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
     static inline const std::string test_identifier = "reg_swaplayout";
@@ -67,6 +81,8 @@ struct test_swap_layout {
         kittens::store(output, reg_tile_other_layout, {});
     }
 };
+#endif
+
 struct test_transpose {
     template<int H, int W, int NW, kittens::ducks::rt_layout::all L> using valid = std::bool_constant<NW == 1 && W*H<=64>; // this is warp-level
     static inline const std::string test_identifier = "reg_transpose";
@@ -255,9 +271,33 @@ void warp::reg::tile::conversions::tests(test_data &results) {
                          INTENSITY_3 ? 8  :
                          INTENSITY_4 ? 16 : -1;
     // swap_layout
+    #ifdef KITTENS_CDNA4
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::row, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::row, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::row, kittens::ducks::rt_layout::accumulator_row>::run(results);
+    // sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::row, kittens::ducks::rt_layout::accumulator_col>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::col, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::col, kittens::ducks::rt_layout::row>::run(results);
+    // sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::col, kittens::ducks::rt_layout::accumulator_row>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::col, kittens::ducks::rt_layout::accumulator_col>::run(results);
+
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_row, kittens::ducks::rt_layout::accumulator_row>::run(results);
+    // sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_row, kittens::ducks::rt_layout::accumulator_col>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_row, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_row, kittens::ducks::rt_layout::col>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_col, kittens::ducks::rt_layout::accumulator_col>::run(results);
+    // sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_col, kittens::ducks::rt_layout::accumulator_row>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_col, kittens::ducks::rt_layout::row>::run(results);
+    sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_col, kittens::ducks::rt_layout::col>::run(results);
+    #else
     sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::row>::run(results);
     sweep_size_2d_warp<test_swap_layout, SIZE, SIZE, kittens::ducks::rt_layout::col>::run(results);
+    #endif
 
+    #ifdef KITTENS_CDNA4
+    // transpose_sweep_size_warp<test_transpose, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_row>::run(results);
+    // transpose_sweep_size_warp<test_transpose, SIZE, SIZE, kittens::ducks::rt_layout::accumulator_col>::run(results);
+    #endif
     transpose_sweep_size_warp<test_transpose, SIZE, SIZE, kittens::ducks::rt_layout::row>::run(results);
     transpose_sweep_size_warp<test_transpose, SIZE, SIZE, kittens::ducks::rt_layout::col>::run(results);
 

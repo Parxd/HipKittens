@@ -52,7 +52,7 @@ __device__ static inline void reduce(
         // final result has now been achieved (incorporating src_accum if necessary), finally broadcast back to all threads.
         dst_accum = packed_shfl(kittens::MASK_ALL, accum, 0);
     }
-    else if constexpr (std::is_same_v<typename RV::layout, align_l>) {
+    else if constexpr (std::is_same_v<typename RV::layout, align_l> || std::is_same_v<typename RV::layout, accum_align_l>) {
         T accum = op::template op<T>(src[0][0].x, src[0][0].y);
 
         #pragma unroll

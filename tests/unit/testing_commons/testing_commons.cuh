@@ -111,6 +111,23 @@ template<int H, int W, int NW, kittens::ducks::rt_layout::all L> std::string gen
     else label += "_[rt_col_layout]";
     return label;
 }
+template<int H, int W, int NW, kittens::ducks::rt_layout::all L1, kittens::ducks::rt_layout::all L2> std::string generate_test_name(std::string test_id) {
+    std::string label = generate_test_name<H,W,NW>(test_id);
+    if constexpr (std::is_same_v<L1, kittens::ducks::rt_layout::row>) label += "_[rt_row_layout]";
+    #ifdef KITTENS_CDNA4
+    else if constexpr (std::is_same_v<L1, kittens::ducks::rt_layout::accumulator_col>) label += "_[rt_accumulator_col_layout]";
+    else if constexpr (std::is_same_v<L1, kittens::ducks::rt_layout::accumulator_row>) label += "_[rt_accumulator_row_layout]";
+    #endif
+    else label += "_[rt_col_layout]";
+
+    if constexpr (std::is_same_v<L2, kittens::ducks::rt_layout::row>) label += "_[rt_row_layout]";
+    #ifdef KITTENS_CDNA4
+    else if constexpr (std::is_same_v<L2, kittens::ducks::rt_layout::accumulator_col>) label += "_[rt_accumulator_col_layout]";
+    else if constexpr (std::is_same_v<L2, kittens::ducks::rt_layout::accumulator_row>) label += "_[rt_accumulator_row_layout]";
+    #endif
+    else label += "_[rt_col_layout]";
+    return label;
+}
 template<int H, int W, int NW, kittens::ducks::st_layout::all SL, kittens::ducks::rt_layout::all L> std::string generate_test_name(std::string test_id) {
     std::string label = generate_test_name<H,W,NW>(test_id);
     if constexpr (std::is_same_v<SL, kittens::ducks::st_layout::row>) label += "_[st_row_layout]";

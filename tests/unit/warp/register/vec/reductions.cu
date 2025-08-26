@@ -42,6 +42,10 @@ void warp::reg::vec::reductions::tests(test_data &results) {
     sweep_size_1d_warp<vec_norm, SIZE, kittens::ducks::rv_layout::align>::run(results);
     sweep_size_1d_warp<vec_norm, SIZE, kittens::ducks::rv_layout::ortho>::run(results);
     sweep_size_1d_warp<vec_norm, SIZE, kittens::ducks::rv_layout::naive>::run(results);
+
+    #ifdef KITTENS_CDNA4
+    sweep_size_1d_warp<vec_norm, SIZE, kittens::ducks::rv_layout::accum_align>::run(results);
+    #endif
 }
 
 #endif

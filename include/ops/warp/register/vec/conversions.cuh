@@ -188,6 +188,9 @@ __device__ static inline void copy(RV1 &dst, const RV2 &src) {
                 dst[i][0] = __float2bfloat16(__shfl(__bfloat162float(val), take));
             }
         }
+        else {
+            static_assert(false, "Unsupported layout conversion");
+        }
     }
 }
 #else

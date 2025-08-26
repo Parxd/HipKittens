@@ -42,10 +42,6 @@ struct accumulator_col {};
 
 #ifdef KITTENS_CDNA4
 template<typename T>
-concept accum = std::is_same_v<T, accumulator_col> || std::is_same_v<T, accumulator_row>;
-template<typename T>
-concept classic = std::is_same_v<T, row> || std::is_same_v<T, col>;
-template<typename T>
 concept all = std::is_same_v<T, row> || std::is_same_v<T, col> || std::is_same_v<T, accumulator_col> || std::is_same_v<T, accumulator_row>;
 #else
 template<typename T>
@@ -61,6 +57,11 @@ template<>      struct transpose<col> { using type = row; };
 #ifdef KITTENS_CDNA4
 template<>      struct transpose<accumulator_col> { using type = accumulator_row; };
 template<>      struct transpose<accumulator_row> { using type = accumulator_col; };
+
+template<all L> struct shuffle{ using type = col; };
+template<>      struct shuffle<accumulator_row> { using type = row; };
+template<>      struct shuffle<col> { using type = accumulator_col; };
+template<>      struct shuffle<row> { using type = accumulator_row; };
 #endif
 
 } // namespace rt_layout
