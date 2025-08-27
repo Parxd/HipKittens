@@ -32,7 +32,13 @@ namespace kittens {
  */
 #ifdef KITTENS_CDNA4
 template<typename T> constexpr int TILE_COL_DIM = sizeof(T) == 1 ? 64 : 32; 
+#ifdef KITTENS_1632
+template<typename T> constexpr int TILE_ROW_DIM = 16;
+constexpr int REPEAT = 1;
+#else
 template<typename T> constexpr int TILE_ROW_DIM = 32;
+constexpr int REPEAT = 2;
+#endif
 #else
 template<typename T> constexpr int TILE_COL_DIM = sizeof(T) == 1 ? 32 : 16;
 template<typename T> constexpr int TILE_ROW_DIM = 16;
