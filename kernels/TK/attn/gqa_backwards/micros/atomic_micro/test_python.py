@@ -3,7 +3,7 @@ import random
 import tk_kernel
 
 torch.set_printoptions(
-    precision=3,        
+    precision=2,        
     sci_mode=False,     
     linewidth=220,      
     threshold=float("inf")  
@@ -28,9 +28,11 @@ y_tk = torch.zeros_like(y)
 tk_kernel.dispatch_micro(x, y_tk)
 
 # check
-diff = (y - y_tk).abs().max()
+diff = (y - y_tk).abs()
+max_diff = diff.max()
 print(y.shape, x.shape)
-print(f"diff: {diff}")
+print(f"max diff: {max_diff}")
 
-print(y_tk[0, 0, 0:32, :1].T)
-print(y[0, 0, 0:32, :1].T)
+print(diff[0, 0, :1, :16])
+
+
