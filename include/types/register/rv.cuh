@@ -45,7 +45,7 @@ struct identifier {};
  * the register layouts used by the tensor cores. ThunderKittens wants you working with tiles
  * where possible!
  */
-template<typename _T, size_t _length, ducks::rv_layout::all _layout=ducks::rv_layout::naive, ducks::rt_matrix::all _matrix_layout=ducks::rt_matrix::mfma_32x32x16>
+template<typename _T, size_t _length, size_t _tile_length, ducks::rv_layout::all _layout=ducks::rv_layout::naive>
 struct rv {
     using identifier = ducks::rv::identifier; ///< Type identifier for the rv structure.
     static_assert(kittens::ducks::base_types::T1<_T>); // confirm it's a supported type
@@ -58,15 +58,8 @@ struct rv {
     using dtype = std::conditional_t<is_naive || is_ortho, T, T2>; ///< Data type of the matrix elements
 
     static constexpr int length = _length; ///< Length in elements.
-
-    static constexpr int tile_size_row = (
-        std::is_same_v<layout, ducks::rv_layout::align> ? matrix_layout::tile_size_col_in : 
-        std::is_same_v<layout, ducks::rv_layout::ortho> ? matrix_layout::tile_size_row_in : 
-        matrix_layout::tile_size_row_in
-    );
-    static_assert(length % tile_size_row == 0, "Length must be divisible by the tile dimension");
-
-    static constexpr int tiles  = _length / tile_size_row; ///< Length in subtiles, aliased for consistency with sv type
+    static_assert(length % _tile_length == 0, "Length must be divisible by the tile dimension");
+    static constexpr int tiles  = _length / _tile_length; ///< Length in subtiles, aliased for consistency with sv type
     static constexpr int inner_dim = layout::inner_dim; ///< Internal layout within a subtile. Either 1 or 2.
     #ifdef KITTENS_CDNA4
     static constexpr int outer_dim = is_naive ? (tiles+1)/2 : tiles;
@@ -111,8 +104,8 @@ template<typename T> concept tile_layout  = align_layout<T> || ortho_layout<T>; 
 } // namespace rv
 } // namespace ducks
 
-template<int _l, ducks::rv_layout::all layout=ducks::rv_layout::naive> using rv_fl = rv<float, _l, layout>;
-template<int _l, ducks::rv_layout::all layout=ducks::rv_layout::naive> using rv_bf = rv<bf16,  _l, layout>;
-template<int _l, ducks::rv_layout::all layout=ducks::rv_layout::naive> using rv_hf = rv<half,  _l, layout>;
+template<int _l, int _tile_length, ducks::rv_layout::all layout=ducks::rv_layout::naive> using rv_fl = rv<float, _l, _tile_length, layout>;
+template<int _l, int _tile_length, ducks::rv_layout::all layout=ducks::rv_layout::naive> using rv_bf = rv<bf16,  _l, _tile_length, layout>;
+template<int _l, int _tile_length, ducks::rv_layout::all layout=ducks::rv_layout::naive> using rv_hf = rv<half,  _l, _tile_length, layout>;
 
 } // namespace kittens

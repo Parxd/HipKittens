@@ -24,7 +24,7 @@ namespace kittens {
  * @param src[in] Reference to the source register base tile to be swapped.
  */
  #ifdef KITTENS_CDNA4
-template<ducks::rt_layout::all layout1, typename T, ducks::rt_layout::all layout2, ducks::rt_layout::all matrix_layout>
+template<ducks::rt_layout::all layout1, typename T, ducks::rt_layout::all layout2, typename matrix_layout>
 __device__ inline void swap_layout(rt_base<T, layout1, matrix_layout> &dst, const rt_base<T, layout2, matrix_layout> &src) {
 
     // same layout
@@ -268,7 +268,7 @@ __device__ static inline void swap_layout(rt<T2, _height, _width, typename ducks
  * @return A reference to the swapped register base tile.
  */
 #ifdef KITTENS_CDNA4
-template<ducks::rt_layout::all layout1, typename T2, ducks::rt_layout::all layout2, ducks::rt_layout::all matrix_layout>
+template<ducks::rt_layout::all layout1, typename T2, ducks::rt_layout::all layout2, typename matrix_layout>
 __device__ inline rt_base<T2, layout1, matrix_layout>& swap_layout_inplace(const rt_base<T2, layout2, matrix_layout> &src) {
     rt_base<T2, layout1, matrix_layout> &dst = *(rt_base<T2, layout1, matrix_layout>*)(&src);
     swap_layout(dst, src);
@@ -333,7 +333,7 @@ __device__ static inline rt<T2, _rows, _cols, typename ducks::rt_layout::transpo
  * @param src[in] Reference to the register base tile to be transposed.
  */
 #ifdef KITTENS_CDNA4
-template<typename T, ducks::rt_layout::all layout, ducks::rt_layout::all matrix_layout>
+template<typename T, ducks::rt_layout::all layout, typename matrix_layout>
 __device__ inline void transpose(rt_base<T, layout, matrix_layout> &dst, const rt_base<T, layout, matrix_layout> &src) {
     int lane = laneid();
     
@@ -450,13 +450,8 @@ __device__ static inline void transpose_sep(RT &dst, const rt<typename RT::T, RT
  * @param src[in] Reference to the register tile to be transposed.
  * @return A reference to the transposed register base tile.
  */
-#ifdef KITTENS_CDNA4
-template<typename T2, ducks::rt_layout::all layout, ducks::rt_layout::all matrix_layout>
+template<typename T2, ducks::rt_layout::all layout, typename matrix_layout>
 __device__ inline rt_base<T2, layout, matrix_layout>& transpose_inplace(rt_base<T2, layout, matrix_layout> &src) {
-#else
-template<typename T2, ducks::rt_layout::all layout>
-__device__ inline rt_base<T2, layout>& transpose_inplace(rt_base<T2, layout> &src) {
-#endif
     transpose(src, src);
     return src;
 }
@@ -470,7 +465,7 @@ __device__ inline rt_base<T2, layout>& transpose_inplace(rt_base<T2, layout> &sr
  * @param src[in] Reference to the register tile to be transposed.
  * @return A reference to the transposed register tile.
  */
-template<typename T2, int _rows, int _cols, ducks::rt_layout::all layout>
+template<typename T2, int _rows, int _cols, ducks::rt_layout::all layout, typename matrix_layout>
 __device__ static inline rt<T2, _rows, _cols, layout>& transpose_inplace(rt<T2, _rows, _cols, layout> &tile) {
     static_assert(_cols == _rows, "in-place register tile transpose is only allowed for square tiles.");
     #pragma unroll
@@ -545,8 +540,8 @@ __device__ static inline void copy(rt_base<T, layout> &dst, const rt_base<U, lay
  * @param[out] dst A reference to the destination register tile.
  * @param[in] src A reference to the source register tile.
  */
-template<typename T2, typename U2, int _height, int _width, ducks::rt_layout::all layout>
-__device__ static inline void copy(rt<T2, _height, _width, layout> &dst, const rt<U2, _height, _width, layout> &src) {
+template<typename T2, typename U2, int _height, int _width, ducks::rt_layout::all layout, typename matrix_layout>
+__device__ static inline void copy(rt<T2, _height, _width, layout, matrix_layout> &dst, const rt<U2, _height, _width, layout, matrix_layout> &src) {
     #pragma unroll
     for(int i = 0; i < dst.height; i++) {
         #pragma unroll
