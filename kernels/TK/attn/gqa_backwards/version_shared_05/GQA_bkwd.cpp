@@ -8,9 +8,9 @@ constexpr int ATTN_D = 128; // dimension
 constexpr int BLOCK_SIZE_QO = 16; // block size for QO
 constexpr int BLOCK_SIZE_KV = 256; // block size for KV
 constexpr int WARP_SIZE_QO = 16; // warp size for QO
-constexpr int WARP_SIZE_KV = 64; // warp size for KV
+constexpr int WARP_SIZE_KV = 32; // warp size for KV
 
-#define NUM_WARPS 4
+#define NUM_WARPS 8
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
 
 using G = kittens::group<NUM_WARPS>;
