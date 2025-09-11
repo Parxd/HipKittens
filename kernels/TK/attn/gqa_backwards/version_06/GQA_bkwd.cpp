@@ -767,8 +767,8 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            load(L_smem[tic], g.L_vec, {batch_idx, q_head_idx + 1, 0, 0});
-            G::load<1, false>(Q_i_smem[tic][0], g.Q, {batch_idx, 0, q_head_idx + 1, 0});
+            load(L_smem[toc], g.L_vec, {batch_idx, q_head_idx + 1, 0, 0});
+            G::load<1, false>(Q_i_smem[toc][0], g.Q, {batch_idx, 0, q_head_idx + 1, 0});
             auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
             store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
             load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {0, 0}));
@@ -848,8 +848,8 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            load(delta_smem[tic], g.delta_vec, {batch_idx, q_head_idx + 1, 0, 0});
-            G::load<1, false>(dO_i_smem[tic][0], g.dOg, {batch_idx, 0, q_head_idx + 1, 0});
+            load(delta_smem[toc], g.delta_vec, {batch_idx, q_head_idx + 1, 0, 0});
+            G::load<1, false>(dO_i_smem[toc][0], g.dOg, {batch_idx, 0, q_head_idx + 1, 0});
             auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
             store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
             load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][0], {1, 0}));
@@ -929,7 +929,7 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            G::load<1, false>(Q_i_smem[tic][1], g.Q, {batch_idx, 1, q_head_idx + 1, 0});
+            G::load<1, false>(Q_i_smem[toc][1], g.Q, {batch_idx, 1, q_head_idx + 1, 0});
             auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
             store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
             load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][1], {0, 0}));
@@ -1009,7 +1009,7 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            G::load<1, false>(dO_i_smem[tic][1], g.dOg, {batch_idx, 1, q_head_idx + 1, 0});
+            G::load<1, false>(dO_i_smem[toc][1], g.dOg, {batch_idx, 1, q_head_idx + 1, 0});
             auto attn_i_smem_subtile = subtile_inplace<WARP_SIZE_KV, DOT_SLICE_QO>(attn_i_smem, {warpid, 0});
             store(attn_i_smem_subtile, dP_ij_bf16_accum_row);
             load(dO_i_col, subtile_inplace<DOT_SLICE_QO, D>(dO_i_smem[tic][1], {1, 0}));
@@ -1032,7 +1032,7 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             // 15. dQ_i += dS_ij @ K_j (32x16)=(32x256)x(256x16)
             load(dP_ij_bf16_col_T, attn_i_smem);
             load(K_j_col, subtile_inplace<256, 16>(K_j_smem, {0, warpid}));
-            asm volatile("s_waitcnt lgkmcnt(0)");
+            __builtin_amdgcn_s_waitcnt(0);
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
@@ -1045,6 +1045,7 @@ __global__ void attend_bwd_combined_ker(const attn_bwd_combined_globals<D> g) {
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
         }
+        tic ^= 1; toc ^= 1;
     } // End of query head group loop
 
     // Head Epilogue
