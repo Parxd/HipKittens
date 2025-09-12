@@ -11,7 +11,7 @@ import aiter
 B = 16
 H = 16
 N = 4096
-HEAD_D = 64
+HEAD_D = 128
 D = HEAD_D * H
 DROPOUT_P = 0.01
 

@@ -7,7 +7,7 @@
 constexpr int B = 16;
 constexpr int H = 16;
 constexpr int N = 4096;
-constexpr int HEAD_D = 64;
+constexpr int HEAD_D = 128;
 constexpr int D = HEAD_D * H;
 constexpr float DROPOUT_P = 0.01;
 
@@ -37,7 +37,7 @@ __device__ void dropout_mask(T &dst, float keep_prob) {
             }
         }
     }
-    mul(dst, dst, __float2bfloat16(1/(1-keep_prob)));
+    // mul(dst, dst, __float2bfloat16(1/(1-keep_prob)));
 }
 
 template<kittens::ducks::sv::all T>
@@ -54,7 +54,7 @@ __device__ void dropout_mask(T &dst, float keep_prob) {
             dst[cur] = base_types::constants<bf16>::zero();
         }
     }
-    mul(dst, dst, __float2bfloat16(1/(1-keep_prob)));
+    // mul(dst, dst, __float2bfloat16(1/(1-keep_prob)));
 }
 
 template<int _d_model> struct norm_globals {
@@ -67,7 +67,6 @@ template<int _d_model> struct norm_globals {
     using o_resid_gl      = gl<bf16, -1, -1, -1, -1>;
     using norm_weight_gl  = gl<bf16, -1, -1, -1, -1>;
     using norm_bias_gl    = gl<bf16, -1, -1, -1, -1>;
-
 
     // global pointers
     x_gl x;
@@ -85,7 +84,7 @@ template<int _d_model> struct norm_globals {
     size_t dynamic_shared_memory() { return D*sizeof(bf16)*2; }
 };
 
-template<int D> __launch_bounds__(NUM_THREADS, 2)
+template<int D> //__launch_bounds__(NUM_THREADS, 2)
 __global__ void layernorm_tk(const norm_globals<D> g) {
 
     auto warpid = kittens::warpid();
@@ -103,23 +102,25 @@ __global__ void layernorm_tk(const norm_globals<D> g) {
     if (warpid == 0) {
         load(norm_bias_s, g.norm_bias, {0,0,0,0});
         load(norm_weight_s, g.norm_weight, {0,0,0,0});
-    }
-    __syncthreads();
+    } 
+    __builtin_amdgcn_s_waitcnt(0);
  
     bf16 mean = __float2bfloat16(0.0f);
     bf16 var  = __float2bfloat16(0.0f);      
-
     int idx = seq_start + warpid;
     load(x_s_reg, g.x, {0, batch, idx, 0});
     if constexpr (DROPOUT_P > 0.0f) {
         dropout_mask(x_s_reg, DROPOUT_P); 
     }
     load(residual_s_reg, g.residual, {0, batch, idx, 0});
-    add(residual_s_reg, residual_s_reg, x_s_reg);    
+    if constexpr (DROPOUT_P > 0.0f) {
+        mul(x_s_reg, x_s_reg, __float2bfloat16(1/(1-DROPOUT_P)));
+    }
+    add(residual_s_reg, residual_s_reg, x_s_reg);   
     store(g.o_resid, residual_s_reg, {0, batch, seq_start+warpid, 0});
 
     // mean and variance
-    sum(mean, residual_s_reg);
+    sum(mean, residual_s_reg); 
     mean = mean / __float2bfloat16(d_model);
     sub(residual_s_reg, residual_s_reg, mean);  
     mul(x_s_reg, residual_s_reg, residual_s_reg);
@@ -130,8 +131,8 @@ __global__ void layernorm_tk(const norm_globals<D> g) {
 
     // compute norm
     div(residual_s_reg, residual_s_reg, var);
-    load(norm_bias_s_reg, norm_bias_s);
     mul(residual_s_reg, residual_s_reg, norm_weight_s_reg); 
+    load(norm_bias_s_reg, norm_bias_s);
     add(residual_s_reg, residual_s_reg, norm_bias_s_reg);
     store(g.o, residual_s_reg, {0, batch, seq_start+warpid, 0});
 }
