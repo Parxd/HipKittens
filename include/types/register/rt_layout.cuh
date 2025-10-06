@@ -24,21 +24,13 @@ struct row {}; // for most matrices
  * @brief A dummy type used to identify a col-major layout for a register tile.
  */
 struct col {}; // for the B-matrix of MMA ops.
-/**
- * @brief A dummy type used to identify an accumulator col-major layout for a register tile.
- */
-struct accumulator_col {};
-/**
- * @brief A dummy type used to identify an accumulator row-major layout for a register tile.
- */
- struct accumulator_row {};
 
 /**
  * @brief A concept to check if a type is a register tile layout.
  */
 
 template<typename T>
-concept all = std::is_same_v<T, row> || std::is_same_v<T, col> || std::is_same_v<T, accumulator_col> || std::is_same_v<T, accumulator_row>;
+concept all = std::is_same_v<T, row> || std::is_same_v<T, col>;
 
 /**
  * @brief A struct to generate a transposed layout.
@@ -46,13 +38,6 @@ concept all = std::is_same_v<T, row> || std::is_same_v<T, col> || std::is_same_v
  */
 template<all L> struct transpose      { using type = col; };
 template<>      struct transpose<col> { using type = row; };
-template<>      struct transpose<accumulator_col> { using type = accumulator_row; };
-template<>      struct transpose<accumulator_row> { using type = accumulator_col; };
-
-template<all L> struct shuffle{ using type = col; };
-template<>      struct shuffle<accumulator_row> { using type = row; };
-template<>      struct shuffle<col> { using type = accumulator_col; };
-template<>      struct shuffle<row> { using type = accumulator_row; };
 
 } // namespace rt_layout
 } // namespace ducks

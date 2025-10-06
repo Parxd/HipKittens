@@ -45,23 +45,22 @@ struct identifier {};
  * the register layouts used by the tensor cores. ThunderKittens wants you working with tiles
  * where possible!
  */
-template<typename _T, size_t _length, size_t _tile_length, ducks::rv_layout::all _layout=ducks::rv_layout::naive>
+template<typename _T, size_t _length, size_t _tile_length, ducks::rv_layout::all _layout=ducks::rv_layout::naive, ducks::rt_tile::all _tile=ducks::rt_tile::16x16>
 struct rv {
     using identifier = ducks::rv::identifier; ///< Type identifier for the rv structure.
     static_assert(kittens::ducks::base_types::T1<_T>); // confirm it's a supported type
     using layout = _layout;
     static constexpr bool is_naive = std::is_same_v<layout, ducks::rv_layout::naive>;
     static constexpr bool is_ortho = std::is_same_v<layout, ducks::rv_layout::ortho>;
-    static constexpr bool is_accum_align = std::is_same_v<layout, ducks::rv_layout::accum_align>;
     using T = kittens::base_types::packing<_T>::unpacked_type;
     using T2 = kittens::base_types::packing<_T>::packed_type;
-    using dtype = std::conditional_t<is_naive || is_ortho || is_accum_align, T, T2>; ///< Data type of the matrix elements
+    using dtype = std::conditional_t<is_naive || is_ortho, T, T2>; ///< Data type of the matrix elements
 
     static constexpr int length = _length; ///< Length in elements.
     static_assert(length % _tile_length == 0, "Length must be divisible by the tile dimension");
     static constexpr int tiles  = _length / _tile_length; ///< Length in subtiles, aliased for consistency with sv type
-    static constexpr int inner_dim = layout::inner_dim; ///< Internal layout within a subtile. Either 1 or 2.
-    static constexpr int outer_dim = is_naive ? (tiles+1)/2 : tiles;
+    static constexpr int inner_dim = is_naive || is_ortho ? 1 : _tile::elements_per_thread;
+    static constexpr int outer_dim = is_naive ? (tiles + 1) / 2 : tiles;
 
     dtype data[outer_dim][inner_dim]; ///< The actual register vector data.
 
@@ -90,14 +89,13 @@ concept all = requires {
 template<typename T> concept naive_layout = all<T> && std::is_same_v<typename T::layout, ducks::rv_layout::naive>;
 template<typename T> concept align_layout = all<T> && std::is_same_v<typename T::layout, ducks::rv_layout::align>;
 template<typename T> concept ortho_layout = all<T> && std::is_same_v<typename T::layout, ducks::rv_layout::ortho>;
-template<typename T> concept accum_align_layout = all<T> && std::is_same_v<typename T::layout, ducks::rv_layout::accum_align>;
-template<typename T> concept tile_layout = accum_align_layout<T> || align_layout<T> || ortho_layout<T>;
+template<typename T> concept tile_layout = align_layout<T> || ortho_layout<T>;
 
 } // namespace rv
 } // namespace ducks
 
-template<int _l, int _tile_length, ducks::rv_layout::all layout=ducks::rv_layout::naive> using rv_fl = rv<float, _l, _tile_length, layout>;
-template<int _l, int _tile_length, ducks::rv_layout::all layout=ducks::rv_layout::naive> using rv_bf = rv<bf16,  _l, _tile_length, layout>;
-template<int _l, int _tile_length, ducks::rv_layout::all layout=ducks::rv_layout::naive> using rv_hf = rv<half,  _l, _tile_length, layout>;
+template<int _l, int _tile_length, ducks::rv_layout::all layout=ducks::rv_layout::naive, ducks::rt_tile::all tile=ducks::rt_tile::16x16> using rv_fl = rv<float, _l, _tile_length, layout, tile>;
+template<int _l, int _tile_length, ducks::rv_layout::all layout=ducks::rv_layout::naive, ducks::rt_tile::all tile=ducks::rt_tile::16x16> using rv_bf = rv<bf16,  _l, _tile_length, layout, tile>;
+template<int _l, int _tile_length, ducks::rv_layout::all layout=ducks::rv_layout::naive, ducks::rt_tile::all tile=ducks::rt_tile::16x16> using rv_hf = rv<half,  _l, _tile_length, layout, tile>;
 
 } // namespace kittens

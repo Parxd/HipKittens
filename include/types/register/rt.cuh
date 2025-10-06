@@ -12,6 +12,7 @@
 
 #include "rt_layout.cuh"
 #include "rt_base.cuh"
+#include "rt_tile.cuh"
 #include "rv.cuh"
 
 namespace kittens {
@@ -51,34 +52,34 @@ struct identifier {};
  * 
  * In general, you probably want a row-major tile, unless you specifically want to call mma
  */
-template<typename _T, int _rows, int _cols, ducks::rt_layout::all _layout=ducks::rt_layout::row, ducks::rt_matrix::all _matrix_layout=ducks::rt_matrix::mfma_32x32x16>
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all _layout=ducks::rt_layout::row, ducks::rt_tile::all _tile=ducks::rt_tile::16x16>
 struct rt {
     using identifier = ducks::rt::identifier; ///< Type identifier for the rt structure.
     using layout = _layout; ///< Layout of the matrix tile.
-    using matrix_layout = _matrix_layout; ///< Layout of the matrix tile.
+    using tile = _tile; ///< Layout of the matrix tile.
     static_assert(kittens::ducks::base_types::T1<_T>); // confirm it's a supported type
     using T = kittens::base_types::packing<_T>::unpacked_type;
     using T2 = kittens::base_types::packing<_T>::packed_type;
     using dtype = T2; ///< Data type of the matrix elements
 
     static constexpr int rows                = _rows; ///< Total number of rows.
-    static_assert(rows % rt_base<T, layout, matrix_layout>::rows == 0, "Rows must be divisible by the tile size");
+    static_assert(rows % rt_base<T, layout, tile>::rows == 0, "Rows must be divisible by the tile size");
     static constexpr int cols                = _cols; ///< Total number of columns.
-    static_assert(cols % rt_base<T, layout, matrix_layout>::cols == 0, "Columns must be divisible by the tile size");
-    static constexpr int height              = rows / rt_base<T, layout, matrix_layout>::rows; ///< Height in subtiles.
-    static constexpr int width               = cols / rt_base<T, layout, matrix_layout>::cols; ///< Width in subtiles.
-    static constexpr int base_tile_rows        = rt_base<T, layout, matrix_layout>::rows;        ///< Size of the base tile.
-    static constexpr int base_tile_cols        = rt_base<T, layout, matrix_layout>::cols;        ///< Size of the base tile.
-    static constexpr int num_elements        = rt_base<T, layout, matrix_layout>::num_elements        * width * height; ///< Total number of elements.
-    static constexpr int elements_per_thread = rt_base<T, layout, matrix_layout>::elements_per_thread * width * height; ///< Elements handled per thread.
-    static constexpr int packed_per_thread   = rt_base<T, layout, matrix_layout>::packed_per_thread   * width * height; ///< Packed elements per thread.
-    static constexpr int packed_per_base_tile     = rt_base<T, layout, matrix_layout>::packed_per_thread; ///< Packed elements per tile.
-    static constexpr int elements_per_base_tile  = rt_base<T, layout, matrix_layout>::elements_per_thread; ///< Elements per thread per base tile.
+    static_assert(cols % rt_base<T, layout, tile>::cols == 0, "Columns must be divisible by the tile size");
+    static constexpr int height              = rows / rt_base<T, layout, tile>::rows; ///< Height in subtiles.
+    static constexpr int width               = cols / rt_base<T, layout, tile>::cols; ///< Width in subtiles.
+    static constexpr int base_tile_rows        = rt_base<T, layout, tile>::rows;        ///< Size of the base tile.
+    static constexpr int base_tile_cols        = rt_base<T, layout, tile>::cols;        ///< Size of the base tile.
+    static constexpr int num_elements        = rt_base<T, layout, tile>::num_elements        * width * height; ///< Total number of elements.
+    static constexpr int elements_per_thread = rt_base<T, layout, tile>::elements_per_thread * width * height; ///< Elements handled per thread.
+    static constexpr int packed_per_thread   = rt_base<T, layout, tile>::packed_per_thread   * width * height; ///< Packed elements per thread.
+    static constexpr int packed_per_base_tile     = rt_base<T, layout, tile>::packed_per_thread; ///< Packed elements per tile.
+    static constexpr int elements_per_base_tile  = rt_base<T, layout, tile>::elements_per_thread; ///< Elements per thread per base tile.
 
-    rt_base<T, layout, matrix_layout> tiles[height][width]; ///< The actual storage for the matrix tile, organized in subtiles.
+    rt_base<T, layout, tile> tiles[height][width]; ///< The actual storage for the matrix tile, organized in subtiles.
 
-    using row_vec = rv<T, cols, tile_size_col, typename rt_base<T, layout, matrix_layout>::row_vec_layout>; ///< A type representing a column vector for this tile.
-    using col_vec = rv<T, rows, tile_size_row, typename rt_base<T, layout, matrix_layout>::col_vec_layout>; ///< A type representing a column vector for this tile.
+    using row_vec = rv<T, cols, tile_size_col, typename rt_base<T, layout, tile>::row_vec_layout>; ///< A type representing a column vector for this tile.
+    using col_vec = rv<T, rows, tile_size_row, typename rt_base<T, layout, tile>::col_vec_layout>; ///< A type representing a column vector for this tile.
 };
 
 /* ----------  CONCEPTS  ---------- */
@@ -116,16 +117,6 @@ concept row_layout = all<T> && std::is_same_v<typename T::layout, ducks::rt_layo
 template<typename T>
 concept col_layout = all<T> && std::is_same_v<typename T::layout, ducks::rt_layout::col>;
 
-
-template<typename T>
-concept row_like = all<T> && (std::is_same_v<typename T::layout, ducks::rt_layout::row> || std::is_same_v<typename T::layout, ducks::rt_layout::accumulator_row>);
-template<typename T>
-concept col_like = all<T> && (std::is_same_v<typename T::layout, ducks::rt_layout::col> || std::is_same_v<typename T::layout, ducks::rt_layout::accumulator_col>);
-template<typename T>
-concept accumulator_row_layout = all<T> && std::is_same_v<typename T::layout, ducks::rt_layout::accumulator_row>;
-template<typename T>
-concept accumulator_col_layout = all<T> && std::is_same_v<typename T::layout, ducks::rt_layout::accumulator_col>;
-
 } // namespace rt
 } // namespace ducks
 
@@ -134,8 +125,8 @@ concept accumulator_col_layout = all<T> && std::is_same_v<typename T::layout, du
 
 // layout and type wrappers
 
-template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row, ducks::rt_matrix::all matrix_layout=ducks::rt_matrix::mfma_32x32x16> using rt_fl = rt<float, _r, _c, layout, matrix_layout>;
-template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row, ducks::rt_matrix::all matrix_layout=ducks::rt_matrix::mfma_32x32x16> using rt_bf = rt<bf16,  _r, _c, layout, matrix_layout>;
-template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row, ducks::rt_matrix::all matrix_layout=ducks::rt_matrix::mfma_32x32x16> using rt_hf = rt<half,  _r, _c, layout, matrix_layout>;
+template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row, ducks::rt_tile::all tile> using rt_fl = rt<float, _r, _c, layout, tile>;
+template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row, ducks::rt_tile::all tile> using rt_bf = rt<bf16,  _r, _c, layout, tile>;
+template<int _r, int _c, ducks::rt_layout::all layout=ducks::rt_layout::row, ducks::rt_tile::all tile> using rt_hf = rt<half,  _r, _c, layout, tile>;
 
 } // namespace kittens

@@ -19,22 +19,21 @@ namespace rv_layout {
 /**
  * @brief A dummy type used to identify an aligned (32x replicated) layout.
  */
-struct align       { constexpr static int inner_dim = 8; };
-struct accum_align { constexpr static int inner_dim = 1; };
+struct align {};
 /**
  * @brief A dummy type used to identify an orthogonal (2x replicated) layout.
  */
-struct ortho { constexpr static int inner_dim = 1; };
+struct ortho {};
 /**
  * @brief A dummy type used to identify an unreplicated layout, for better coalesced loads and vector operations like layernorm.
  */
-struct naive { constexpr static int inner_dim = 1; };
+struct naive {};
 
 /**
  * @brief A concept to check if a type is a register tile layout.
  */
 template<typename T>
-concept all = std::is_same_v<T, align> || std::is_same_v<T, accum_align> || std::is_same_v<T, ortho> || std::is_same_v<T, naive>;
+concept all = std::is_same_v<T, align> || std::is_same_v<T, ortho> || std::is_same_v<T, naive>;
 
 } // namespace rv_layout
 } // namespace ducks
