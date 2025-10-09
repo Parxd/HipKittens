@@ -38,8 +38,8 @@ __global__ __launch_bounds__(NUM_THREADS, 2)
 void micro_tk(const micro_globals g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
-    st_bf<BLOCK_SIZE, K_STEP> (&As)[2] = al.allocate<st_bf<BLOCK_SIZE, K_STEP>, 2>();
-    st_bf<BLOCK_SIZE, K_STEP> (&Bs)[2] = al.allocate<st_bf<BLOCK_SIZE, K_STEP>, 2>();
+    st_bf<BLOCK_SIZE, K_STEP, st_32x32_s> (&As)[2] = al.allocate<st_bf<BLOCK_SIZE, K_STEP, st_32x32_s>, 2>();
+    st_bf<BLOCK_SIZE, K_STEP, st_32x32_s> (&Bs)[2] = al.allocate<st_bf<BLOCK_SIZE, K_STEP, st_32x32_s>, 2>();
 
     rt_bf<REG_BLOCK_M, DOT_SLICE, row_l, rt_32x16_s> A_tile;
     rt_bf<REG_BLOCK_N, DOT_SLICE, row_l, rt_32x16_s> B_tile;
@@ -75,8 +75,8 @@ void micro_tk(const micro_globals g) {
 
     int tic = 0;
     int toc = 1;
-    using T = typename st_bf<BLOCK_SIZE, K_STEP>::dtype;
-    constexpr int bytes_per_thread = 16;
+    using T = typename st_bf<BLOCK_SIZE, K_STEP, st_32x32_s>::dtype;
+    constexpr int bytes_per_thread = st_32x32_s::template bytes_per_thread<T>();
     constexpr int bytes_per_memcpy = bytes_per_thread * NUM_THREADS;
     constexpr int memcpy_per_tile = BLOCK_SIZE * K_STEP * sizeof(T) / bytes_per_memcpy;
     uint32_t swizzled_offsets_A[memcpy_per_tile];
