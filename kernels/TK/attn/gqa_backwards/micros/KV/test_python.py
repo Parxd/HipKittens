@@ -24,9 +24,9 @@ def robustness_check(ref, pred):
     rel_error = error_count / numel
     l2_error = (diff.pow(2).sum().sqrt() / ref.pow(2).sum().sqrt()).item()
     cos = torch.nn.functional.cosine_similarity(ref.flatten(), pred.flatten(), dim=0).item()
-    return diff, error_count, numel, rel_error, l2_error, cos, mask 
+    return diff, error_count, numel, rel_error, l2_error, cos, mask  
 
-n = 256
+n = 64
 d = 128
 
 # pytorch
@@ -52,3 +52,4 @@ diff, error_count, numel, rel_error, l2_error, cos, mask = robustness_check(y, y
 print(f"A: max_abs={diff.max().item():.6f}, max_rel={rel_error:.4f}, "
       f"rel_l2={l2_error:.4f}, cos={cos:.6f}, "
       f"errors={error_count}/{numel} ({100*error_count/numel:.4f}%)")
+

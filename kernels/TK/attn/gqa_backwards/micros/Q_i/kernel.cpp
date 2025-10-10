@@ -8,7 +8,7 @@ constexpr int DOT_SLICE_QO = 16;
 
 template<int D, typename T=bf16, typename L=row_l, typename S=rt_16x16_s> using qo_tile = rt<T, DOT_SLICE_QO, D, L, S>;
 
-#define NUM_WARPS 8
+#define NUM_WARPS 4
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
 
 using G = kittens::group<NUM_WARPS>;
@@ -21,14 +21,14 @@ template<int D> struct micro_globals {
     size_t dynamic_shared_memory() { return MAX_SHARED_MEMORY; }
 };
 
-#define COL
+// #define COL
 
 template<int D> __global__ __launch_bounds__(NUM_THREADS, 1)
 void micro_tk(const micro_globals<D> g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
 
-    st_bf<SLICE_QO, D> (&Q_i_smem) = al.allocate<st_bf<SLICE_QO, D>>();
+    st_bf<SLICE_QO, D, st_16x32_s> (&Q_i_smem) = al.allocate<st_bf<SLICE_QO, D, st_16x32_s>>();
 
     // Register tiles
     qo_tile<D, bf16, row_l, rt_16x32_s> Q_i;

@@ -27,10 +27,10 @@ def robustness_check(ref, pred):
     return diff, error_count, numel, rel_error, l2_error, cos, mask 
 
 n = 256
-d = 128
+d = 64
 
 # pytorch
-x = torch.randn((1, n, 1, d), dtype=torch.bfloat16, device='cuda')
+x = torch.randn((1, 1, n, d), dtype=torch.bfloat16, device='cuda')
 
 # reference
 y = x
@@ -42,11 +42,11 @@ tk_kernel.dispatch_micro(x, y_tk)
 # check
 diff = (y - y_tk).abs().max()
 print(y.shape, x.shape)
-print(f"diff: {diff}")
+print(f"max diff: {diff}")
 
 num_print = 8
-print("y: ", y[0, 0:num_print, 0, :num_print])
-print("y_tk: ", y_tk[0, 0:num_print, 0, :num_print])
+print(y[0, 0, 0:num_print, :num_print])
+print(y_tk[0, 0, 0:num_print, :num_print])
 
 diff, error_count, numel, rel_error, l2_error, cos, mask = robustness_check(y, y_tk)
 print(f"A: max_abs={diff.max().item():.6f}, max_rel={rel_error:.4f}, "

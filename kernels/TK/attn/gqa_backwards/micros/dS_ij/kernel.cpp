@@ -5,12 +5,12 @@ using namespace kittens;
 constexpr int ATTN_D = 128; // dimension
 constexpr int BLOCK_SIZE_KV = 256; // block size for KV
 constexpr int DOT_SLICE_QO = 16;
-constexpr int WARP_SIZE_KV = 32; // warp size for KV
+constexpr int WARP_SIZE_KV = 64; // warp size for KV
 
 template<int D, typename T=bf16, typename L=row_l, typename S=rt_16x16_s> using attn_tile_T = rt<T, WARP_SIZE_KV, DOT_SLICE_QO, L, S>;
-template<int D, typename T=bf16, typename L=col_l, typename S=rt_32x16_s> using attn_tile_T_dq = rt<T, BLOCK_SIZE_KV, DOT_SLICE_QO, L, S>;
+template<int D, typename T=bf16, typename L=col_l, typename S=rt_32x16_4_s> using attn_tile_T_dq = rt<T, BLOCK_SIZE_KV, DOT_SLICE_QO, L, S>;
 
-#define NUM_WARPS 8
+#define NUM_WARPS 4
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
 
 using G = kittens::group<NUM_WARPS>;
@@ -28,7 +28,7 @@ void micro_tk(const micro_globals<D> g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
 
-    st_bf<BLOCK_SIZE_KV, DOT_SLICE_QO> (&attn_i_smem) = al.allocate<st_bf<BLOCK_SIZE_KV, DOT_SLICE_QO>>();
+    st_bf<BLOCK_SIZE_KV, DOT_SLICE_QO, st_16x16_swizzled_s> (&attn_i_smem) = al.allocate<st_bf<BLOCK_SIZE_KV, DOT_SLICE_QO, st_16x16_swizzled_s>>();
 
     // Register tiles
     attn_tile_T<D> dP_ij_bf16_accum_row;
