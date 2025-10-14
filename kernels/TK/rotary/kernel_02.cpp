@@ -37,15 +37,15 @@ template<int _d_model> struct rotary_globals {
 };
 
 template<int D>
-__device__ __forceinline__ void apply_rotary_embedding(rt<bf16, BLOCK_SIZE, ROPE_DIM> &x_reg,
-                                              const rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM> &cos_reg,
-                                              const rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM> &sin_reg) {
-    rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM> temp1, temp2, temp3;
+__device__ __forceinline__ void apply_rotary_embedding(rt<bf16, BLOCK_SIZE, ROPE_DIM, row_l, rt_32x32_8_s> &x_reg,
+                                              const rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM, row_l, rt_32x32_8_s> &cos_reg,
+                                              const rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM, row_l, rt_32x32_8_s> &sin_reg) {
+    rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM, row_l, rt_32x32_8_s> temp1, temp2, temp3;
     constexpr int half_dim_tiles = HALF_ROPE_DIM / BLOCK_SIZE;
     #pragma unroll
     for(int i = 0; i < half_dim_tiles; i++) {
         #pragma unroll
-        for(int j = 0; j < rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM>::packed_per_thread; j++) {
+        for(int j = 0; j < rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM, row_l, rt_32x32_8_s>::packed_per_thread; j++) {
             auto x1_val = x_reg.tiles[0][i].data[j];
             auto x2_val = x_reg.tiles[0][i + half_dim_tiles].data[j];
             auto cos_val = cos_reg.tiles[0][i].data[j];
@@ -61,7 +61,7 @@ __device__ __forceinline__ void apply_rotary_embedding(rt<bf16, BLOCK_SIZE, ROPE
     #pragma unroll
     for(int i = 0; i < half_dim_tiles; i++) {
         #pragma unroll
-        for(int j = 0; j < rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM>::packed_per_thread; j++) {
+        for(int j = 0; j < rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM, row_l, rt_32x32_8_s>::packed_per_thread; j++) {
             x_reg.tiles[0][i].data[j] = temp1.tiles[0][i].data[j];
             x_reg.tiles[0][i + half_dim_tiles].data[j] = temp2.tiles[0][i].data[j];
         }
@@ -76,13 +76,13 @@ __global__ void tk_fused_rotary(const rotary_globals<D> g) {
     const int h = blockIdx.x%ATTN_H;
     const int n = blockIdx.y;
 
-    rt<bf16, BLOCK_SIZE, ROPE_DIM> x_reg;
-    rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM> cos_reg, sin_reg;
+    rt<bf16, BLOCK_SIZE, ROPE_DIM, row_l, rt_32x32_8_s> x_reg;
+    rt<bf16, BLOCK_SIZE, HALF_ROPE_DIM, row_l, rt_32x32_8_s> cos_reg, sin_reg;
 
     load(cos_reg, g.cos, {0, 0, n, 0});
     load(sin_reg, g.sin, {0, 0, n, 0});
     load(x_reg, g.x, {b, h, n, 0});
-    asm volatile("s_waitcnt lgkmcnt(0)");
+    asm volatile("s_waitcnt vmcnt(0)");
     apply_rotary_embedding<D>(x_reg, cos_reg, sin_reg);
     store(g.o, x_reg, {b, h, n, 0}); 
 }
