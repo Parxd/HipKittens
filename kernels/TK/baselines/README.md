@@ -89,8 +89,9 @@ From within ghte ```composable_kernel/build/``` directory run:
 ninja tile_example_gemm_basic
 ninja tile_example_gemm_universal
 ninja tile_example_streamk_gemm_basic
-````
+```
 
+We picked the best of these options for each dimension:
 ```bash 
 # https://github.com/ROCm/composable_kernel/tree/develop/example/ck_tile/40_streamk_gemm 
 ./bin/tile_example_streamk_gemm_basic -prec=bf16 -m=1024 -n=1024 -k=1024 -warmup=500 -repeat=100 -v=1 
