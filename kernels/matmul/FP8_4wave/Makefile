@@ -33,29 +33,5 @@ $(TARGET): $(SRC)
 	$(HIPCXX) $(HIPFLAGS) $(ICXXFLAGS) -c $(SRC) -o $(BUILD_DIR)/matmul.o
 	$(HIPCXX) $(HIPFLAGS) $(BUILD_DIR)/matmul.o -o $(TARGET)
 
-LOAD=load
-LOAD_SRC=load.cu
-
-$(LOAD): $(LOAD_SRC)
-	mkdir -p $(BUILD_DIR)
-	$(HIPCXX) $(HIPFLAGS) -c $(LOAD_SRC) -o $(BUILD_DIR)/load.o
-	$(HIPCXX) $(HIPFLAGS) $(BUILD_DIR)/load.o -o $(LOAD)
-
-TARGET_2048=matmul_2048
-SRC_2048=matmul_2048.cu
-
-$(TARGET_2048): $(SRC_2048)
-	mkdir -p $(BUILD_DIR)
-	$(HIPCXX) $(HIPFLAGS) $(ICXXFLAGS) -c $(SRC_2048) -o $(BUILD_DIR)/matmul_2048.o
-	$(HIPCXX) $(HIPFLAGS) $(BUILD_DIR)/matmul_2048.o -o $(TARGET_2048)
-
-TARGET_1024=matmul_1024
-SRC_1024=matmul_1024.cu
-
-$(TARGET_1024): $(SRC_1024)
-	mkdir -p $(BUILD_DIR)
-	$(HIPCXX) $(HIPFLAGS) $(ICXXFLAGS) -c $(SRC_1024) -o $(BUILD_DIR)/matmul_1024.o
-	$(HIPCXX) $(HIPFLAGS) $(BUILD_DIR)/matmul_1024.o -o $(TARGET_1024)
-
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) $(LOAD) $(TARGET_2048) $(TARGET_1024)
+	rm -rf $(BUILD_DIR) $(TARGET)
