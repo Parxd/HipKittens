@@ -82,8 +82,8 @@ __device__ inline void load_global_to_shared_direct_unit_fp6(int i, const uint8_
     const int laneid = kittens::laneid();
     constexpr int num_warps = N_THREADS / kittens::WARP_THREADS;
 
-    const int shared_base_tile_cols = 128;
-    const int shared_base_tile_rows = 16;
+    constexpr int shared_base_tile_cols = 128;
+    constexpr int shared_base_tile_rows = 16;
 
     const int bytes_per_shared_base_tile = shared_base_tile_cols * shared_base_tile_rows;
     const int shared_base_tiles_per_row = ST::cols / shared_base_tile_cols;
@@ -121,7 +121,7 @@ __device__ inline void load_global_to_shared_direct_unit_fp6(int i, const uint8_
 
 template<typename ST_GL, typename GL_GL, typename ST, typename RT, typename RT_A, typename RT_B, typename RT_C, ducks::coord::tile COORD=coord<ST_GL>>
 __device__ inline static void do_interleaved_cluster(
-    ST_GL& dst_st, const GL_GL& src_gl, COORD idx,
+    ST_GL& dst_st, const GL_GL& src_gl, COORD idx, 
     RT& dst, const ST& src, 
     RT_A& a, RT_B& b, RT_C& c
 ) {
@@ -154,7 +154,7 @@ __device__ inline static void do_interleaved_cluster(
     using U2 = base_types::packing<U >::packed_type;
 
     auto* lds_bytes_st_to_reg = reinterpret_cast<const uint8_t*>(&src.data[0]);
-    const int tile_stride = 16 * 128;
+    constexpr int tile_stride = 16 * 128;
     const int row_stride_st_to_reg = tile_stride * src.underlying_width;    
     const int row_offset = laneid % 16;
     const int col_byte_offset = 32 * (laneid / 16);
@@ -286,12 +286,6 @@ __device__ inline static void do_interleaved_cluster(
 }
 
 
-
-
-
-
-
-
 __global__ __launch_bounds__(NUM_THREADS, 1)
 void micro_tk(const micro_globals g) {
     extern __shared__ alignment_dummy __shm[];
@@ -305,6 +299,7 @@ void micro_tk(const micro_globals g) {
     using RT_A = rt_f6<REG_BLOCK_M, K_STEP>;
     using RT_B = rt_f6<REG_BLOCK_N, K_STEP>;
     using RT_C = rt_fl<REG_BLOCK_M, REG_BLOCK_N, ducks::rt_layout::accumulator>;
+
 
     // Convert linear block ID to 2D coordinates
     int block_row = blockIdx.y;
@@ -508,11 +503,8 @@ void micro_tk(const micro_globals g) {
     {
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt vmcnt(0)");
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
-
-        __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
+        __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
         auto b_subtile_1 = kittens::subtile_inplace<REG_BLOCK_N, K_STEP>(Bs[tic][1], {warp_n, 0});
@@ -521,7 +513,6 @@ void micro_tk(const micro_globals g) {
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[0][0], a[0], b[0], c[0][0]);
         __builtin_amdgcn_sched_barrier(0);
-        
         
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
@@ -540,9 +531,6 @@ void micro_tk(const micro_globals g) {
 
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[1][0], a[1], b[0], c[1][0]);
-        __builtin_amdgcn_sched_barrier(0);
-
-        __builtin_amdgcn_sched_barrier(0);
         mma_ABt(c[1][1], a[1], b[1], c[1][1]);
         __builtin_amdgcn_sched_barrier(0);
     }
@@ -608,7 +596,7 @@ int main() {
     // random number generator
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_real_distribution<> dis(-0.0f, 4.0f);
+    std::uniform_real_distribution<> dis(-.0f, 1.0f);
 
     // Initialize with different values
     for (int i = 0; i < M * K; i++) {
