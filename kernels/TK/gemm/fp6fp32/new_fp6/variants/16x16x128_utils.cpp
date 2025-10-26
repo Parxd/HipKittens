@@ -169,6 +169,73 @@ __device__ inline void load_global_to_shared_direct_with_swizzled_offsets(
 
 // ------------------------------32-packed fp6--------------------------------
 
+
+// Direct global-to-shared load using buffer load to LDS
+template<int axis, bool assume_aligned,
+         ducks::st::all ST, ducks::gl::all GL,
+         ducks::coord::tile COORD = coord<ST>,
+         int N_THREADS = WARP_THREADS>
+__device__ inline void load_global_to_shared_fp6(
+    const GL& src, const COORD& idx, ST& dst)
+{
+
+    using T = typename ST::dtype;
+    constexpr int bytes_per_thread = 16;
+    constexpr int memcpy_per_tile =  (ST::rows * ST::cols) / (bytes_per_thread * N_THREADS);
+    static_assert(memcpy_per_tile > 0, "memcpy_per_tile must be greater than 0. Please decrease the number of threads.");
+
+    constexpr int bytes_per_warp = bytes_per_thread * kittens::WARP_THREADS;
+    const int warp_id = warpid();
+    const int laneid = kittens::laneid();
+    const int row_stride = src.template stride<axis>();
+    constexpr int num_warps = N_THREADS / kittens::WARP_THREADS;
+
+    const int shared_base_tile_cols = 128;
+    const int shared_base_tile_rows = 16;
+
+    const int bytes_per_shared_base_tile = shared_base_tile_cols * shared_base_tile_rows;
+    const int shared_base_tiles_per_row = ST::cols / shared_base_tile_cols;
+
+    coord<> unit_coord = idx.template unit_coord<axis, 3>();
+    auto* global_ptr = reinterpret_cast<const uint8_t*>(&src[unit_coord]);
+    i32x4 srsrc = make_srsrc(global_ptr, row_stride * ST::rows * 6 / 8); 
+    auto* lds_bytes = reinterpret_cast<uint8_t*>(&dst.data[0]);
+    const uint8_t* lds_base = lds_bytes + warp_id * bytes_per_warp;
+
+    #pragma unroll
+    for (int i = 0; i < memcpy_per_tile; i++) {
+
+        const int byte_offset = ((i * num_warps + warp_id) * bytes_per_warp) + (laneid * bytes_per_thread);
+        const int tile_id = byte_offset / bytes_per_shared_base_tile;
+        const int tile_row_offset = tile_id / shared_base_tiles_per_row;
+        const int tile_col_offset = tile_id % shared_base_tiles_per_row;
+
+        const int base_tile_byte_offset = byte_offset % bytes_per_shared_base_tile;
+        const int swizzled_base_tile_byte_offset = base_tile_byte_offset ^ (((base_tile_byte_offset % (8*128)) >> 7) << 4);
+        
+        const int swizzled_col_offset = (swizzled_base_tile_byte_offset % (shared_base_tile_cols * 1)) / 1;
+        const int swizzled_row_offset = swizzled_base_tile_byte_offset / (shared_base_tile_cols * 1);
+
+        const int col_offset_in_global = tile_col_offset * shared_base_tile_cols + swizzled_col_offset;
+        const int row_offset_in_global = tile_row_offset * shared_base_tile_rows + swizzled_row_offset;
+
+        const int offset_in_global = (row_offset_in_global * row_stride + col_offset_in_global) * 6 / 8;
+
+        const uint8_t* lds_elem_ptr = lds_base + i * N_THREADS * bytes_per_thread;
+        as3_uint32_ptr lds_ptr = (as3_uint32_ptr)reinterpret_cast<uintptr_t>(lds_elem_ptr);
+
+        llvm_amdgcn_raw_buffer_load_lds(
+            srsrc, // buffer resource
+            lds_ptr,
+            12, // 12 bytes is specified but the thread actually writes 16 bytes, last 4 garbage
+            offset_in_global,
+            0, 
+            0, // instruction offset
+            static_cast<index_t>(coherency::cache_all)); // cache coherency
+
+    }
+}
+
 // Direct global-to-shared load using buffer load to LDS
 template<int axis, bool assume_aligned,
          ducks::st::all ST, ducks::gl::all GL,

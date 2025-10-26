@@ -76,20 +76,16 @@ template <typename ST, int N_THREADS = WARP_THREADS>
 __device__ inline void load_global_to_shared_direct_unit_fp6(int i, const uint8_t* lds_base, i32x4 srsrc, int row_stride)
 {
     constexpr int bytes_per_thread = 16;
+    constexpr int shared_base_tile_cols = 128;
+    constexpr int shared_base_tile_rows = 16;
 
     constexpr int bytes_per_warp = bytes_per_thread * kittens::WARP_THREADS;
     const int warp_id = warpid();
     const int laneid = kittens::laneid();
-    constexpr int num_warps = N_THREADS / kittens::WARP_THREADS;
-
-    constexpr int shared_base_tile_cols = 128;
-    constexpr int shared_base_tile_rows = 16;
 
     const int bytes_per_shared_base_tile = shared_base_tile_cols * shared_base_tile_rows;
     const int shared_base_tiles_per_row = ST::cols / shared_base_tile_cols;
-
-
-    const int byte_offset = ((i * num_warps + warp_id) * bytes_per_warp) + (laneid * bytes_per_thread);
+    const int byte_offset = ((i * NUM_WARPS + warp_id) * bytes_per_warp) + (laneid * bytes_per_thread);
     const int tile_id = byte_offset / bytes_per_shared_base_tile;
     const int tile_row_offset = tile_id / shared_base_tiles_per_row;
     const int tile_col_offset = tile_id % shared_base_tiles_per_row;
@@ -102,7 +98,6 @@ __device__ inline void load_global_to_shared_direct_unit_fp6(int i, const uint8_
 
     const int col_offset_in_global = tile_col_offset * shared_base_tile_cols + swizzled_col_offset;
     const int row_offset_in_global = tile_row_offset * shared_base_tile_rows + swizzled_row_offset;
-
     const int offset_in_global = (row_offset_in_global * row_stride + col_offset_in_global) * 6 / 8;
 
     const uint8_t* lds_elem_ptr = lds_base + i * N_THREADS * bytes_per_thread;
@@ -141,7 +136,6 @@ __device__ inline static void do_interleaved_cluster(
     coord<> unit_coord = idx.template unit_coord<axis, 3>();
     auto* global_ptr = reinterpret_cast<const uint8_t*>(&src_gl[unit_coord]);
     i32x4 srsrc = make_srsrc(global_ptr, row_stride_gl_to_st * ST_GL::rows * 6 / 8);
-
     auto* lds_bytes = reinterpret_cast<uint8_t*>(&dst_st.data[0]);
     const uint8_t* lds_base = lds_bytes + warp_id * bytes_per_warp;
 
@@ -153,17 +147,6 @@ __device__ inline static void do_interleaved_cluster(
     using U  = ST::dtype;
     using U2 = base_types::packing<U >::packed_type;
 
-    auto* lds_bytes_st_to_reg = reinterpret_cast<const uint8_t*>(&src.data[0]);
-    constexpr int tile_stride = 16 * 128;
-    const int row_stride_st_to_reg = tile_stride * src.underlying_width;    
-    const int row_offset = laneid % 16;
-    const int col_byte_offset = 32 * (laneid / 16);
-    uint32_t byte_offset = (row_offset * 128 + col_byte_offset);
-    uint32_t swizzled_byte_offset = byte_offset ^ (((byte_offset % (8*128)) >> 7) << 4);
-    uint32_t byte_offset_second = byte_offset + 16;
-    uint32_t swizzled_byte_offset_second = byte_offset_second ^ (((byte_offset_second % (8*128)) >> 7) << 4);
-    uint32_t addr_0 = reinterpret_cast<uintptr_t>(lds_bytes_st_to_reg + swizzled_byte_offset);
-    uint32_t addr_1 = reinterpret_cast<uintptr_t>(lds_bytes_st_to_reg + swizzled_byte_offset_second);
 
     /*******
     * global to shared: 
@@ -172,7 +155,16 @@ __device__ inline static void do_interleaved_cluster(
     {
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt_base_wrapper(c, a, b, c, 0, 1, 0);
-        __builtin_amdgcn_sched_barrier(0);
+        // __builtin_amdgcn_sched_barrier(0);
+
+        uint32_t base_addr = reinterpret_cast<uintptr_t>(&src.data[0]);
+        constexpr int row_stride_st_to_reg = 16 * 128 * 1;    
+        const int row_offset = laneid % 16;
+        const int col_byte_offset = 32 * (laneid / 16);
+        uint32_t byte_offset = (row_offset * 128 + col_byte_offset);
+        uint32_t addr_0 = base_addr + (byte_offset ^ (((byte_offset % (8*128)) >> 7) << 4));
+        byte_offset += 16; 
+        uint32_t addr_1 = base_addr + (byte_offset ^ (((byte_offset % (8*128)) >> 7) << 4));
 
         {
             load_global_to_shared_direct_unit_fp6<ST_GL,NUM_THREADS>(0, lds_base, srsrc, row_stride_gl_to_st);
@@ -185,7 +177,7 @@ __device__ inline static void do_interleaved_cluster(
                 : "memory"
             );
 
-            // __builtin_amdgcn_sched_barrier(0);
+            __builtin_amdgcn_sched_barrier(0);
             mma_ABt_base_wrapper(c, a, b, c, 0, 2, 0);
             // __builtin_amdgcn_sched_barrier(0);
 
@@ -204,6 +196,7 @@ __device__ inline static void do_interleaved_cluster(
         {
             load_global_to_shared_direct_unit_fp6<ST_GL,NUM_THREADS>(1, lds_base, srsrc, row_stride_gl_to_st);
             constexpr int i = 1;
+            
             asm volatile(
                 "ds_read_b96 %0, %1 offset:%2\n"
                 : "=v"(*reinterpret_cast<__uint96_t*>((reinterpret_cast<uint8_t*>(&dst.tiles[i][0].data[0]))))
@@ -277,7 +270,7 @@ __device__ inline static void do_interleaved_cluster(
                 "i"(i * row_stride_st_to_reg)
                 : "memory"
             );
-            // __builtin_amdgcn_sched_barrier(0);
+            __builtin_amdgcn_sched_barrier(0);
             mma_ABt_base_wrapper(c, a, b, c, 3, 2, 0);
             mma_ABt_base_wrapper(c, a, b, c, 3, 3, 0);
             // __builtin_amdgcn_sched_barrier(0);
@@ -314,38 +307,31 @@ void micro_tk(const micro_globals g) {
 
     int tic = 0;
     int toc = 1;
-    constexpr int bytes_per_thread = 12;
-    constexpr int memcpy_per_tile_A = (HALF_BLOCK_SIZE_M * K_STEP * 6 / 8) / (bytes_per_thread * NUM_THREADS);
-    constexpr int memcpy_per_tile_B = (HALF_BLOCK_SIZE_N * K_STEP * 6 / 8) / (bytes_per_thread * NUM_THREADS);
-    // Register array to store swizzled global addresses for each thread.
-    uint32_t swizzled_offsets_A[memcpy_per_tile_A];
-    uint32_t swizzled_offsets_B[memcpy_per_tile_B];
-    prefill_swizzled_offsets_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW, 0}, As[tic][0], swizzled_offsets_A);
-    prefill_swizzled_offsets_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL, 0}, Bs[tic][0], swizzled_offsets_B);
 
     /***************************************************************/
     __builtin_amdgcn_sched_barrier(0);
     RT_A a[2];
     RT_B b[2];
     RT_C c[2][2];
+
+    // initial loads 
+    load_global_to_shared_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW, 0}, As[tic][0]);
+    load_global_to_shared_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL, 0}, Bs[tic][0]);
+    load_global_to_shared_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW+1, 0}, As[tic][1]);
+    load_global_to_shared_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL+1, 0}, Bs[tic][1]);
+
     zero(c[0][0]);
     zero(c[0][1]);
     zero(c[1][0]);
     zero(c[1][1]);
 
-    // initial loads 
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW, 0}, As[tic][0], swizzled_offsets_A);
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL, 0}, Bs[tic][0], swizzled_offsets_B);
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW+1, 0}, As[tic][1], swizzled_offsets_A);
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL+1, 0}, Bs[tic][1], swizzled_offsets_B);
-
     // // more loads
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW, 1}, As[toc][0], swizzled_offsets_A);
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL, 1}, Bs[toc][0], swizzled_offsets_B);
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW+1, 1}, As[toc][1], swizzled_offsets_A);
-    load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL+1, 1}, Bs[toc][1], swizzled_offsets_B);
+    load_global_to_shared_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW, 1}, As[toc][0]);
+    load_global_to_shared_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL, 1}, Bs[toc][0]);
+    load_global_to_shared_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW+1, 1}, As[toc][1]);
+    load_global_to_shared_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL+1, 1}, Bs[toc][1]);
 
-    __builtin_amdgcn_s_waitcnt(0);
+    __builtin_amdgcn_sched_barrier(0);
     asm volatile("s_waitcnt vmcnt(28)"); 
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
@@ -375,18 +361,11 @@ void micro_tk(const micro_globals g) {
         // cluster 1 (load, interleave, wait)
         // load
         auto bs_subtile_1 = kittens::subtile_inplace<REG_BLOCK_N, K_STEP>(Bs[tic][1], {warp_n, 0});
-        // load_lds_reg_row_fp6(b[1], bs_subtile_1);
-        // load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW, k+2}, As[tic][0], swizzled_offsets_A);
-        // // mma
-        // __builtin_amdgcn_sched_barrier(0);
-        // mma_ABt(c[0][0], a[0], b[0], c[0][0]);
-        // __builtin_amdgcn_sched_barrier(0);
         do_interleaved_cluster(
             As[tic][0], g.a, {0, 0, block_row*WARPS_ROW, k+2},
             b[1], bs_subtile_1, 
             a[0], b[0], c[0][0]
         );
-        // wait
         // __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
         // __builtin_amdgcn_sched_barrier(0);
@@ -394,12 +373,6 @@ void micro_tk(const micro_globals g) {
 
         // cluster 2 (load, interleave, wait)
         auto a_subtile_1 = kittens::subtile_inplace<REG_BLOCK_M, K_STEP>(As[tic][1], {warp_m, 0});
-        // load_lds_reg_row_fp6(a[1], a_subtile_1);
-        // load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL, k+2}, Bs[tic][0], swizzled_offsets_B);
-        // // mma
-        // __builtin_amdgcn_sched_barrier(0);
-        // mma_ABt(c[0][1], a[0], b[1], c[0][1]);
-        // __builtin_amdgcn_sched_barrier(0);
         do_interleaved_cluster(
             Bs[tic][0], g.b, {0, 0, block_col*WARPS_COL, k+2},
             a[1], a_subtile_1, 
@@ -414,12 +387,6 @@ void micro_tk(const micro_globals g) {
 
         // cluster 3 (load, interleave)
         auto a_subtile_0 = kittens::subtile_inplace<REG_BLOCK_M, K_STEP>(As[toc][0], {warp_m, 0});
-        // load_lds_reg_row_fp6(a[0], a_subtile_0);
-        // load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW+1, k+2}, As[tic][1], swizzled_offsets_A);
-        // // mma
-        // __builtin_amdgcn_sched_barrier(0);
-        // mma_ABt(c[1][0], a[1], b[0], c[1][0]);
-        // __builtin_amdgcn_sched_barrier(0);
         do_interleaved_cluster(
             As[tic][1], g.a, {0, 0, block_row*WARPS_ROW+1, k+2},
             a[0], a_subtile_0, 
@@ -429,12 +396,6 @@ void micro_tk(const micro_globals g) {
 
         // cluster 4 (load, interleave, wait)
         auto b_subtile_0 = kittens::subtile_inplace<REG_BLOCK_N, K_STEP>(Bs[toc][0], {warp_n, 0});
-        // load_lds_reg_row_fp6(b[0], b_subtile_0);
-        // load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL+1, k+2}, Bs[tic][1], swizzled_offsets_B);
-        // // mma 
-        // __builtin_amdgcn_sched_barrier(0);
-        // mma_ABt(c[1][1], a[1], b[1], c[1][1]);
-        // __builtin_amdgcn_sched_barrier(0);
         do_interleaved_cluster(
             Bs[tic][1], g.b, {0, 0, block_col*WARPS_COL+1, k+2},
             b[0], b_subtile_0, 
@@ -534,7 +495,7 @@ void micro_tk(const micro_globals g) {
         mma_ABt(c[1][1], a[1], b[1], c[1][1]);
         __builtin_amdgcn_sched_barrier(0);
     }
-    __builtin_amdgcn_sched_barrier(0);
+    // __builtin_amdgcn_sched_barrier(0);
 
 
     // Stores
@@ -635,14 +596,14 @@ int main() {
 
     // Warmup
     // Warmup
-    const int WARMUP_REPS = 10;
+    const int WARMUP_REPS = 500;
     for (int r = 0; r < WARMUP_REPS; ++r) { 
         micro_tk<<<globals.grid(), globals.block(), globals.dynamic_shared_memory(), stream>>>(globals);
     }
     hipDeviceSynchronize();
 
     // Timed kernel-only loop
-    const int REPS = 50;
+    const int REPS = 100;
     std::vector<float> times_ms;
     times_ms.reserve(REPS);
     for (int r = 0; r < REPS; ++r) {
