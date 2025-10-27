@@ -14,17 +14,17 @@ using dout = float;
     std::cerr << "HIP error " << hipGetErrorString(_e) \
               << " at " << __FILE__ << ":" << __LINE__ << std::endl; std::exit(1);} } while(0)
 
-constexpr int BLOCK_SIZE_M     = 128;
-constexpr int BLOCK_SIZE_N     = 128;  
+constexpr int BLOCK_SIZE_M     = 256;
+constexpr int BLOCK_SIZE_N     = 256;  
 constexpr int K_STEP           = 128;
               
 
-#define NUM_WARPS 1
+#define NUM_WARPS 4
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
 
-#define M 128
+#define M 256
+#define N 256
 #define K 128
-#define N 128
 
 using _gl_A = gl<din, -1, -1, -1, -1>;
 using _gl_B = gl<din, -1, -1, -1, -1>;
@@ -49,8 +49,8 @@ void micro_tk(const micro_globals g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
 
-    using ST_A = st_fp6<128, 128, st_16x128_s>; // TO CHECK
-    using ST_B = st_fp6<128, 128, st_16x128_s>;
+    using ST_A = st_fp6<256, 128, st_16x128_s>; // TO CHECK
+    using ST_B = st_fp6<256, 128, st_16x128_s>;
     ST_A (&As) = al.allocate<ST_A>(); // TO CHECK
     ST_B (&Bs) = al.allocate<ST_B>();
 
@@ -81,19 +81,22 @@ void micro_tk(const micro_globals g) {
     rt<float, 64, 64, col_l, rt_16x16_s, C_accum_11_range> C_accum_11;
     rt<float, 64, 64, col_l, rt_16x16_s, C_vgpr_range> C_vgpr;
 
-    load(As, g.a, {0, 0, 0, 0});
-    load(Bs, g.b, {0, 0, 0, 0});
+    const int warp_row = warpid() / 2;
+    const int warp_col = warpid() % 2;
+
+    G::load(As, g.a, {0, 0, 0, 0});
+    G::load(Bs, g.b, {0, 0, 0, 0});
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
 
-    auto a_subtile_0 = kittens::subtile_inplace<64, 128>(As, {0, 0});
+    auto a_subtile_0 = kittens::subtile_inplace<64, 128>(As, {warp_row*2, 0});
     load(A_0, a_subtile_0);
-    auto a_subtile_1 = kittens::subtile_inplace<64, 128>(As, {1, 0});
+    auto a_subtile_1 = kittens::subtile_inplace<64, 128>(As, {warp_row*2+1, 0});
     load(A_1, a_subtile_1);
-    auto b_subtile_0 = kittens::subtile_inplace<64, 128>(Bs, {0, 0});
+    auto b_subtile_0 = kittens::subtile_inplace<64, 128>(Bs, {warp_col*2, 0});
     load(B_0, b_subtile_0);
-    auto b_subtile_1 = kittens::subtile_inplace<64, 128>(Bs, {1, 0});
+    auto b_subtile_1 = kittens::subtile_inplace<64, 128>(Bs, {warp_col*2+1, 0});
     load(B_1, b_subtile_1);
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
@@ -114,13 +117,13 @@ void micro_tk(const micro_globals g) {
     macros::v_nop();
     macros::v_nop();
     accvgpr_read(C_vgpr, C_accum_00);
-    store(g.c, C_vgpr, {0, 0, 0, 0}, {0, 0, 0, 0});
+    store(g.c, C_vgpr, {0, 0, 0, 0}, {0, 0, warp_row*2, warp_col*2});
     accvgpr_read(C_vgpr, C_accum_01);
-    store(g.c, C_vgpr, {0, 0, 0, 1}, {0, 0, 0, 0});
+    store(g.c, C_vgpr, {0, 0, 0, 1}, {0, 0, warp_row*2, warp_col*2});
     accvgpr_read(C_vgpr, C_accum_10);
-    store(g.c, C_vgpr, {0, 0, 1, 0}, {0, 0, 0, 0});
+    store(g.c, C_vgpr, {0, 0, 1, 0}, {0, 0, warp_row*2, warp_col*2});
     accvgpr_read(C_vgpr, C_accum_11);
-    store(g.c, C_vgpr, {0, 0, 1, 1}, {0, 0, 0, 0});
+    store(g.c, C_vgpr, {0, 0, 1, 1}, {0, 0, warp_row*2, warp_col*2});
 }
 
 
