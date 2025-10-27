@@ -12,7 +12,7 @@ We double buffer shared memory (2 256x128 A shared tiles and 2 256x128 B shared 
 - top half of A tile
 - top half of B tile
 - bottom half of B tile
-- top half of A tile
+- bottom half of A tile
 
 Each of the above loads is actually 4 `load_dwordx3` instructions. In this kernel, we've manually interleaved each individual `load_dwordx3` with the `ds_read_b96` and `mfma` instructions.
 
