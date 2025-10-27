@@ -32,9 +32,9 @@ constexpr int REG_BLOCK_N      = BLOCK_SIZE_N / 2 / WARPS_COL;
 #define NUM_WARPS 4
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
 
-#define M 1024
-#define K 1024
-#define N 1024
+#define M 8192
+#define K 8192
+#define N 8192
 constexpr int k_iters = K / K_STEP; // K iterations
 
 using _gl_A = gl<din, -1, -1, -1, -1>;
@@ -393,16 +393,16 @@ void micro_tk(const micro_globals g) {
         // cluster 1 (load, interleave, wait)
         // load
         auto bs_subtile_1 = kittens::subtile_inplace<REG_BLOCK_N, K_STEP>(Bs[tic][1], {warp_n, 0});
-        // do_interleaved_cluster(
-        //     As[tic][0], g.a, {0, 0, block_row*WARPS_ROW, k+2},
-        //     b[1], bs_subtile_1, 
-        //     a[0], b[0], c[0][0]
-        // );
-        load_lds_reg_row_fp6(b[1], bs_subtile_1);
-        load_global_to_shared_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW, k+2}, As[tic][0]);
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[0][0], a[0], b[0], c[0][0]);
-        __builtin_amdgcn_sched_barrier(0);
+        do_interleaved_cluster(
+            As[tic][0], g.a, {0, 0, block_row*WARPS_ROW, k+2},
+            b[1], bs_subtile_1, 
+            a[0], b[0], c[0][0]
+        );
+        // load_lds_reg_row_fp6(b[1], bs_subtile_1);
+        // load_global_to_shared_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW, k+2}, As[tic][0]);
+        // __builtin_amdgcn_sched_barrier(0);
+        // mma_ABt(c[0][0], a[0], b[0], c[0][0]);
+        // __builtin_amdgcn_sched_barrier(0);
 
         // __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
@@ -411,16 +411,16 @@ void micro_tk(const micro_globals g) {
 
         // cluster 2 (load, interleave, wait)
         auto a_subtile_1 = kittens::subtile_inplace<REG_BLOCK_M, K_STEP>(As[tic][1], {warp_m, 0});
-        // do_interleaved_cluster(
-        //     Bs[tic][0], g.b, {0, 0, block_col*WARPS_COL, k+2},
-        //     a[1], a_subtile_1, 
-        //     a[0], b[1], c[0][1]
-        // );
-        load_lds_reg_row_fp6(a[1], a_subtile_1);
-        load_global_to_shared_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL, k+2}, Bs[tic][0]);
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[0][1], a[0], b[1], c[0][1]);
-        __builtin_amdgcn_sched_barrier(0);
+        do_interleaved_cluster(
+            Bs[tic][0], g.b, {0, 0, block_col*WARPS_COL, k+2},
+            a[1], a_subtile_1, 
+            a[0], b[1], c[0][1]
+        );
+        // load_lds_reg_row_fp6(a[1], a_subtile_1);
+        // load_global_to_shared_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL, k+2}, Bs[tic][0]);
+        // __builtin_amdgcn_sched_barrier(0);
+        // mma_ABt(c[0][1], a[0], b[1], c[0][1]);
+        // __builtin_amdgcn_sched_barrier(0);
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt vmcnt(16)");
         asm volatile("s_waitcnt lgkmcnt(0)");
@@ -429,30 +429,30 @@ void micro_tk(const micro_globals g) {
 
         // cluster 3 (load, interleave)
         auto a_subtile_0 = kittens::subtile_inplace<REG_BLOCK_M, K_STEP>(As[toc][0], {warp_m, 0});
-        // do_interleaved_cluster(
-        //     As[tic][1], g.a, {0, 0, block_row*WARPS_ROW+1, k+2},
-        //     a[0], a_subtile_0, 
-        //     a[1], b[0], c[1][0]
-        // );
-        load_lds_reg_row_fp6(a[0], a_subtile_0);
-        load_global_to_shared_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW+1, k+2}, As[tic][1]);
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[1][0], a[1], b[0], c[1][0]);
-        __builtin_amdgcn_sched_barrier(0);
+        do_interleaved_cluster(
+            As[tic][1], g.a, {0, 0, block_row*WARPS_ROW+1, k+2},
+            a[0], a_subtile_0, 
+            a[1], b[0], c[1][0]
+        );
+        // load_lds_reg_row_fp6(a[0], a_subtile_0);
+        // load_global_to_shared_fp6<2, false, ST_A, _gl_A, coord<ST_A>, NUM_THREADS>(g.a, {0, 0, block_row*WARPS_ROW+1, k+2}, As[tic][1]);
+        // __builtin_amdgcn_sched_barrier(0);
+        // mma_ABt(c[1][0], a[1], b[0], c[1][0]);
+        // __builtin_amdgcn_sched_barrier(0);
 
 
         // cluster 4 (load, interleave, wait)
         auto b_subtile_0 = kittens::subtile_inplace<REG_BLOCK_N, K_STEP>(Bs[toc][0], {warp_n, 0});
-        // do_interleaved_cluster(
-        //     Bs[tic][1], g.b, {0, 0, block_col*WARPS_COL+1, k+2},
-        //     b[0], b_subtile_0, 
-        //     a[1], b[1], c[1][1]
-        // );
-        load_lds_reg_row_fp6(b[0], b_subtile_0);
-        load_global_to_shared_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL+1, k+2}, Bs[tic][1]);
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[1][1], a[1], b[1], c[1][1]);
-        __builtin_amdgcn_sched_barrier(0);
+        do_interleaved_cluster(
+            Bs[tic][1], g.b, {0, 0, block_col*WARPS_COL+1, k+2},
+            b[0], b_subtile_0, 
+            a[1], b[1], c[1][1]
+        );
+        // load_lds_reg_row_fp6(b[0], b_subtile_0);
+        // load_global_to_shared_fp6<2, false, ST_B, _gl_B, coord<ST_B>, NUM_THREADS>(g.b, {0, 0, block_col*WARPS_COL+1, k+2}, Bs[tic][1]);
+        // __builtin_amdgcn_sched_barrier(0);
+        // mma_ABt(c[1][1], a[1], b[1], c[1][1]);
+        // __builtin_amdgcn_sched_barrier(0);
 
     }
 

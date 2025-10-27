@@ -551,14 +551,14 @@ int main() {
 
     // Warmup
     // Warmup
-    const int WARMUP_REPS = 0;
+    const int WARMUP_REPS = 500;
     for (int r = 0; r < WARMUP_REPS; ++r) { 
         micro_tk<<<globals.grid(), globals.block(), globals.dynamic_shared_memory(), stream>>>(globals);
     }
     hipDeviceSynchronize();
 
     // Timed kernel-only loop
-    const int REPS = 1;
+    const int REPS = 100;
     std::vector<float> times_ms;
     times_ms.reserve(REPS);
     for (int r = 0; r < REPS; ++r) {
