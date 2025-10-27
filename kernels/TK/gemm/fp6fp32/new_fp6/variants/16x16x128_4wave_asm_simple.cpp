@@ -17,7 +17,15 @@ using dout = float;
 constexpr int BLOCK_SIZE_M     = 256;
 constexpr int BLOCK_SIZE_N     = 256;  
 constexpr int K_STEP           = 128;
-              
+
+constexpr int HALF_BLOCK_SIZE_M = BLOCK_SIZE_M / 2;
+constexpr int HALF_BLOCK_SIZE_N = BLOCK_SIZE_N / 2;
+
+constexpr int WARPS_ROW = 2;
+constexpr int WARPS_COL = 2;
+
+constexpr int REG_BLOCK_M      = BLOCK_SIZE_M / 2 / WARPS_ROW;
+constexpr int REG_BLOCK_N      = BLOCK_SIZE_N / 2 / WARPS_COL;
 
 #define NUM_WARPS 4
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
@@ -49,10 +57,10 @@ void micro_tk(const micro_globals g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
 
-    using ST_A = st_fp6<256, 128, st_16x128_s>; // TO CHECK
-    using ST_B = st_fp6<256, 128, st_16x128_s>;
-    ST_A (&As) = al.allocate<ST_A>(); // TO CHECK
-    ST_B (&Bs) = al.allocate<ST_B>();
+    using ST_A = st_fp6<HALF_BLOCK_SIZE_M, K_STEP, st_16x128_s>; // TO CHECK
+    using ST_B = st_fp6<HALF_BLOCK_SIZE_N, K_STEP, st_16x128_s>;
+    ST_A (&As)[2] = al.allocate<ST_A, 2>(); // TO CHECK
+    ST_B (&Bs)[2] = al.allocate<ST_B, 2>();
 
     using A_0_range          = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<224, 255>>, 8>; // 32 registers - v[224:255]
     using A_1_range          = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<192, 223>>, 8>;
@@ -84,19 +92,21 @@ void micro_tk(const micro_globals g) {
     const int warp_row = warpid() / 2;
     const int warp_col = warpid() % 2;
 
-    G::load(As, g.a, {0, 0, 0, 0});
-    G::load(Bs, g.b, {0, 0, 0, 0});
+    G::load(As[0], g.a, {0, 0, 0, 0});
+    G::load(As[1], g.a, {0, 0, 1, 0});
+    G::load(Bs[0], g.b, {0, 0, 0, 0});
+    G::load(Bs[1], g.b, {0, 0, 1, 0});
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
 
-    auto a_subtile_0 = kittens::subtile_inplace<64, 128>(As, {warp_row*2, 0});
+    auto a_subtile_0 = kittens::subtile_inplace<64, 128>(As[0], {warp_row, 0});
     load(A_0, a_subtile_0);
-    auto a_subtile_1 = kittens::subtile_inplace<64, 128>(As, {warp_row*2+1, 0});
+    auto a_subtile_1 = kittens::subtile_inplace<64, 128>(As[1], {warp_row, 0});
     load(A_1, a_subtile_1);
-    auto b_subtile_0 = kittens::subtile_inplace<64, 128>(Bs, {warp_col*2, 0});
+    auto b_subtile_0 = kittens::subtile_inplace<64, 128>(Bs[0], {warp_col, 0});
     load(B_0, b_subtile_0);
-    auto b_subtile_1 = kittens::subtile_inplace<64, 128>(Bs, {warp_col*2+1, 0});
+    auto b_subtile_1 = kittens::subtile_inplace<64, 128>(Bs[1], {warp_col, 0});
     load(B_1, b_subtile_1);
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
@@ -110,20 +120,20 @@ void micro_tk(const micro_globals g) {
     mma_ABt(C_accum_01, A_0, B_1);
     mma_ABt(C_accum_10, A_1, B_0);
     mma_ABt(C_accum_11, A_1, B_1);
-    macros::v_nop();
-    macros::v_nop();
-    macros::v_nop();
-    macros::v_nop();
-    macros::v_nop();
-    macros::v_nop();
+    // macros::v_nop();
+    // macros::v_nop();
+    // macros::v_nop();
+    // macros::v_nop();
+    // macros::v_nop();
+    // macros::v_nop();
     accvgpr_read(C_vgpr, C_accum_00);
-    store(g.c, C_vgpr, {0, 0, 0, 0}, {0, 0, warp_row*2, warp_col*2});
+    store(g.c, C_vgpr, {0, 0, 0, 0}, {0, 0, warp_row, warp_col});
     accvgpr_read(C_vgpr, C_accum_01);
-    store(g.c, C_vgpr, {0, 0, 0, 1}, {0, 0, warp_row*2, warp_col*2});
+    store(g.c, C_vgpr, {0, 0, 0, 2}, {0, 0, warp_row, warp_col});
     accvgpr_read(C_vgpr, C_accum_10);
-    store(g.c, C_vgpr, {0, 0, 1, 0}, {0, 0, warp_row*2, warp_col*2});
+    store(g.c, C_vgpr, {0, 0, 2, 0}, {0, 0, warp_row, warp_col});
     accvgpr_read(C_vgpr, C_accum_11);
-    store(g.c, C_vgpr, {0, 0, 1, 1}, {0, 0, warp_row*2, warp_col*2});
+    store(g.c, C_vgpr, {0, 0, 2, 2}, {0, 0, warp_row, warp_col});
 }
 
 
