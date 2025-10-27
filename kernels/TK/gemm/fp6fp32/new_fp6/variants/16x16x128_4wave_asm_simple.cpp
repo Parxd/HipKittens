@@ -14,17 +14,17 @@ using dout = float;
     std::cerr << "HIP error " << hipGetErrorString(_e) \
               << " at " << __FILE__ << ":" << __LINE__ << std::endl; std::exit(1);} } while(0)
 
-constexpr int BLOCK_SIZE_M     = 64;
-constexpr int BLOCK_SIZE_N     = 64;  
+constexpr int BLOCK_SIZE_M     = 128;
+constexpr int BLOCK_SIZE_N     = 128;  
 constexpr int K_STEP           = 128;
               
 
 #define NUM_WARPS 1
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
 
-#define M 64
+#define M 128
 #define K 128
-#define N 64
+#define N 128
 
 using _gl_A = gl<din, -1, -1, -1, -1>;
 using _gl_B = gl<din, -1, -1, -1, -1>;
@@ -49,25 +49,36 @@ void micro_tk(const micro_globals g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
 
-    using ST_A = st_fp6<64, 128, st_16x128_s>; // TO CHECK
-    using ST_B = st_fp6<64, 128, st_16x128_s>;
+    using ST_A = st_fp6<128, 128, st_16x128_s>; // TO CHECK
+    using ST_B = st_fp6<128, 128, st_16x128_s>;
     ST_A (&As) = al.allocate<ST_A>(); // TO CHECK
     ST_B (&Bs) = al.allocate<ST_B>();
 
     using A_0_range          = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<224, 255>>, 8>; // 32 registers - v[224:255]
-    using B_0_range          = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<192, 223>>, 8>; // 32 registers - v[192:223]
-    using C_accum_0_range    = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<256, 319>>, 4>; // 64 registers - a[0:63]
+    using A_1_range          = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<192, 223>>, 8>;
+    using B_0_range          = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<160, 191>>, 8>; // 32 registers - v[192:223]
+    using B_1_range          = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<128, 159>>, 8>;
+    using C_accum_00_range    = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<256, 319>>, 4>;
+    using C_accum_01_range    = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<320, 383>>, 4>; // 64 registers - a[0:63]
+    using C_accum_10_range    = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<384, 447>>, 4>;
+    using C_accum_11_range    = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<448, 511>>, 4>;
     using C_vgpr_range       = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<128, 191>>, 4>; // 64 registers - v[128:191]
 
+    using clobber_range_v = ducks::rt::type_list<ducks::rt::range<128, 255>>;
+    using clobber_range_a = ducks::rt::type_list<ducks::rt::range<256, 511>>;
+
     // Clobber the registers
-    ducks::rt::clobber<A_0_range>();
-    ducks::rt::clobber<B_0_range>();
-    ducks::rt::clobber<C_accum_0_range>();
-    ducks::rt::clobber<C_vgpr_range>();
-    
+    ducks::rt::clobber<clobber_range_a>();
+    ducks::rt::clobber<clobber_range_v>();
+
     rt<fp6, 64, 128, row_l, rt_16x128_s, A_0_range> A_0;
+    rt<fp6, 64, 128, row_l, rt_16x128_s, A_1_range> A_1;
     rt<fp6, 64, 128, row_l, rt_16x128_s, B_0_range> B_0;
-    rt<float, 64, 64, col_l, rt_16x16_s, C_accum_0_range> C_accum_0;
+    rt<fp6, 64, 128, row_l, rt_16x128_s, B_1_range> B_1;
+    rt<float, 64, 64, col_l, rt_16x16_s, C_accum_00_range> C_accum_00;
+    rt<float, 64, 64, col_l, rt_16x16_s, C_accum_01_range> C_accum_01;
+    rt<float, 64, 64, col_l, rt_16x16_s, C_accum_10_range> C_accum_10;
+    rt<float, 64, 64, col_l, rt_16x16_s, C_accum_11_range> C_accum_11;
     rt<float, 64, 64, col_l, rt_16x16_s, C_vgpr_range> C_vgpr;
 
     load(As, g.a, {0, 0, 0, 0});
@@ -76,25 +87,40 @@ void micro_tk(const micro_globals g) {
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
 
-    load(A_0, As);
-    load(B_0, Bs);
+    auto a_subtile_0 = kittens::subtile_inplace<64, 128>(As, {0, 0});
+    load(A_0, a_subtile_0);
+    auto a_subtile_1 = kittens::subtile_inplace<64, 128>(As, {1, 0});
+    load(A_1, a_subtile_1);
+    auto b_subtile_0 = kittens::subtile_inplace<64, 128>(Bs, {0, 0});
+    load(B_0, b_subtile_0);
+    auto b_subtile_1 = kittens::subtile_inplace<64, 128>(Bs, {1, 0});
+    load(B_1, b_subtile_1);
     __builtin_amdgcn_s_waitcnt(0);
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
 
     shuffle_in_place(A_0);
     shuffle_in_place(B_0);
-    mma_ABt(C_accum_0, A_0, B_0);
+    shuffle_in_place(A_1);
+    shuffle_in_place(B_1);
+    mma_ABt(C_accum_00, A_0, B_0);
+    mma_ABt(C_accum_01, A_0, B_1);
+    mma_ABt(C_accum_10, A_1, B_0);
+    mma_ABt(C_accum_11, A_1, B_1);
     macros::v_nop();
     macros::v_nop();
     macros::v_nop();
     macros::v_nop();
     macros::v_nop();
     macros::v_nop();
-    accvgpr_read(C_vgpr, C_accum_0);
-
+    accvgpr_read(C_vgpr, C_accum_00);
     store(g.c, C_vgpr, {0, 0, 0, 0}, {0, 0, 0, 0});
-
+    accvgpr_read(C_vgpr, C_accum_01);
+    store(g.c, C_vgpr, {0, 0, 0, 1}, {0, 0, 0, 0});
+    accvgpr_read(C_vgpr, C_accum_10);
+    store(g.c, C_vgpr, {0, 0, 1, 0}, {0, 0, 0, 0});
+    accvgpr_read(C_vgpr, C_accum_11);
+    store(g.c, C_vgpr, {0, 0, 1, 1}, {0, 0, 0, 0});
 }
 
 
