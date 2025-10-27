@@ -8,7 +8,7 @@ using namespace kittens;
 
 
 using din = fp6;
-using dout = float;
+using dout = bf16;
 
 #define HIP_CHECK(x) do { hipError_t _e = (x); if (_e != hipSuccess) { \
     std::cerr << "HIP error " << hipGetErrorString(_e) \
@@ -30,9 +30,9 @@ constexpr int REG_BLOCK_N      = BLOCK_SIZE_N / 2 / WARPS_COL;
 #define NUM_WARPS 4
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
 
-#define M 256
-#define N 256
-#define K 256
+#define M 8192
+#define N 8192
+#define K 8192
 constexpr int k_iters = K / K_STEP;
 
 using _gl_A = gl<din, -1, -1, -1, -1>;
@@ -72,6 +72,7 @@ void micro_tk(const micro_globals g) {
     using C_accum_10_range    = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<384, 447>>, 4>;
     using C_accum_11_range    = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<448, 511>>, 4>;
     using C_vgpr_range       = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<128, 191>>, 4>; // 64 registers - v[128:191]
+    using C_vgpr_bf16_range  = ducks::rt::split_many_t<ducks::rt::type_list<ducks::rt::range<192, 223>>, 2>; // 32 registers - v[192:223]
 
     using clobber_range_v = ducks::rt::type_list<ducks::rt::range<128, 255>>;
     using clobber_range_a = ducks::rt::type_list<ducks::rt::range<256, 511>>;
@@ -88,17 +89,21 @@ void micro_tk(const micro_globals g) {
     rt<float, 64, 64, col_l, rt_16x16_s, C_accum_01_range> C_accum_01;
     rt<float, 64, 64, col_l, rt_16x16_s, C_accum_10_range> C_accum_10;
     rt<float, 64, 64, col_l, rt_16x16_s, C_accum_11_range> C_accum_11;
-    rt<float, 64, 64, col_l, rt_16x16_s, C_vgpr_range> C_vgpr;
+    rt<float, 64, 64, col_l, rt_16x16_s, C_vgpr_range> C_vgpr_transposed;
+    rt<bf16, 64, 64, row_l, rt_16x16_s, C_vgpr_bf16_range> C_vgpr_bf16;
+
+    const int row = blockIdx.y;
+    const int col = blockIdx.x;
 
     const int warp_row = warpid() / 2;
     const int warp_col = warpid() % 2;
 
     {
         constexpr int k = 0;
-        G::load(As[0], g.a, {0, 0, 0, k});
-        G::load(As[1], g.a, {0, 0, 1, k});
-        G::load(Bs[0], g.b, {0, 0, 0, k});
-        G::load(Bs[1], g.b, {0, 0, 1, k});
+        G::load(As[0], g.a, {0, 0, row*2, k});
+        G::load(As[1], g.a, {0, 0, row*2+1, k});
+        G::load(Bs[0], g.b, {0, 0, col*2, k});
+        G::load(Bs[1], g.b, {0, 0, col*2+1, k});
         __builtin_amdgcn_s_waitcnt(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
@@ -119,17 +124,17 @@ void micro_tk(const micro_globals g) {
         shuffle_in_place(B_0);
         shuffle_in_place(A_1);
         shuffle_in_place(B_1);
-        mma_ABt(C_accum_00, A_0, B_0);
-        mma_ABt(C_accum_01, A_0, B_1);
-        mma_ABt(C_accum_10, A_1, B_0);
-        mma_ABt(C_accum_11, A_1, B_1);
+        mma_ABt(C_accum_00, B_0, A_0);
+        mma_ABt(C_accum_01, B_1, A_0);
+        mma_ABt(C_accum_10, B_0, A_1);
+        mma_ABt(C_accum_11, B_1, A_1);
     }
 
     for (int k = 1; k < k_iters; k++) {
-        G::load(As[0], g.a, {0, 0, 0, k});
-        G::load(As[1], g.a, {0, 0, 1, k});
-        G::load(Bs[0], g.b, {0, 0, 0, k});
-        G::load(Bs[1], g.b, {0, 0, 1, k});
+        G::load(As[0], g.a, {0, 0, row*2, k});
+        G::load(As[1], g.a, {0, 0, row*2+1, k});
+        G::load(Bs[0], g.b, {0, 0, col*2, k});
+        G::load(Bs[1], g.b, {0, 0, col*2+1, k});
         __builtin_amdgcn_s_waitcnt(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
@@ -150,10 +155,10 @@ void micro_tk(const micro_globals g) {
         shuffle_in_place(B_0);
         shuffle_in_place(A_1);
         shuffle_in_place(B_1);
-        mma_ABt(C_accum_00, A_0, B_0, C_accum_00);
-        mma_ABt(C_accum_01, A_0, B_1, C_accum_01);
-        mma_ABt(C_accum_10, A_1, B_0, C_accum_10);
-        mma_ABt(C_accum_11, A_1, B_1, C_accum_11);
+        mma_ABt(C_accum_00, B_0, A_0, C_accum_00);
+        mma_ABt(C_accum_01, B_1, A_0, C_accum_01);
+        mma_ABt(C_accum_10, B_0, A_1, C_accum_10);
+        mma_ABt(C_accum_11, B_1, A_1, C_accum_11);
     }
     // macros::v_nop();
     // macros::v_nop();
@@ -161,14 +166,19 @@ void micro_tk(const micro_globals g) {
     // macros::v_nop();
     // macros::v_nop();
     // macros::v_nop();
-    accvgpr_read(C_vgpr, C_accum_00);
-    store(g.c, C_vgpr, {0, 0, 0, 0}, {0, 0, warp_row, warp_col});
-    accvgpr_read(C_vgpr, C_accum_01);
-    store(g.c, C_vgpr, {0, 0, 0, 2}, {0, 0, warp_row, warp_col});
-    accvgpr_read(C_vgpr, C_accum_10);
-    store(g.c, C_vgpr, {0, 0, 2, 0}, {0, 0, warp_row, warp_col});
-    accvgpr_read(C_vgpr, C_accum_11);
-    store(g.c, C_vgpr, {0, 0, 2, 2}, {0, 0, warp_row, warp_col});
+    accvgpr_read(C_vgpr_transposed, C_accum_00);
+    rt<float, 64, 64, row_l, rt_16x16_s, ducks::rt::transpose_2d<C_vgpr_range, 4, 4>> C_vgpr;
+    copy(C_vgpr_bf16, C_vgpr);
+    store(g.c, C_vgpr_bf16, {0, 0, row*4, col*4}, {0, 0, warp_row, warp_col});
+    accvgpr_read(C_vgpr_transposed, C_accum_01);
+    copy(C_vgpr_bf16, C_vgpr);
+    store(g.c, C_vgpr_bf16, {0, 0, row*4, col*4+2}, {0, 0, warp_row, warp_col});
+    accvgpr_read(C_vgpr_transposed, C_accum_10);
+    copy(C_vgpr_bf16, C_vgpr);
+    store(g.c, C_vgpr_bf16, {0, 0, row*4+2, col*4}, {0, 0, warp_row, warp_col});
+    accvgpr_read(C_vgpr_transposed, C_accum_11);
+    copy(C_vgpr_bf16, C_vgpr);
+    store(g.c, C_vgpr_bf16, {0, 0, row*4+2, col*4+2}, {0, 0, warp_row, warp_col});
 }
 
 
@@ -312,7 +322,7 @@ int main() {
 
     // CPU reference: compute A * B^T
     std::cout << "Computing CPU reference...\n";
-    half *cpu_result = new half[M * N];
+    dout *cpu_result = new dout[M * N];
     #pragma omp parallel for collapse(2)
     for (int i = 0; i < M; i++) {
         for (int j = 0; j < N; j++) {
@@ -320,7 +330,7 @@ int main() {
             for (int k = 0; k < K; k++) {
                 sum += float(h_input_a[i * K + k]) * float(h_input_b[j * K + k]);
             }
-            cpu_result[i * N + j] = half(sum);
+            cpu_result[i * N + j] = dout(sum);
         }
     }
     
@@ -335,7 +345,7 @@ int main() {
         const float rtol = 0.1f;   // ~u with a little margin
         const float atol = 1e-2f;   // floor for tiny expected values
         float diff = fabs(float(cpu_result[i]) - h_output_float);
-        float threshold = rtol * fabs(float(cpu_result[i])) + atol;
+        float threshold = 0;//rtol * fabs(float(cpu_result[i])) + atol;
         max_diff = std::max(max_diff, diff);
         total_diff += diff;
         if (diff > threshold) {

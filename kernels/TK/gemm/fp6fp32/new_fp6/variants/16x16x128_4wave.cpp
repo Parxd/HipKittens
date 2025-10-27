@@ -32,9 +32,9 @@ constexpr int REG_BLOCK_N      = BLOCK_SIZE_N / 2 / WARPS_COL;
 #define NUM_WARPS 4
 #define NUM_THREADS (kittens::WARP_THREADS * NUM_WARPS)
 
-#define M 8192
-#define K 8192
-#define N 8192
+#define M 1024
+#define K 1024
+#define N 1024
 constexpr int k_iters = K / K_STEP; // K iterations
 
 using _gl_A = gl<din, -1, -1, -1, -1>;
