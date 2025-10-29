@@ -86,12 +86,14 @@ Backwards:
 
 From within ghte ```composable_kernel/build/``` directory run:
 ```bash
+#gemm_basic and gemm_universal fail correctness at M=N=K=8192 and M=N=K=16384
 ninja tile_example_gemm_basic
 ninja tile_example_gemm_universal
+
+# We therefore use streamk_gemm_basic
 ninja tile_example_streamk_gemm_basic
 ```
 
-We picked the best of these options for each dimension:
 ```bash 
 # https://github.com/ROCm/composable_kernel/tree/develop/example/ck_tile/40_streamk_gemm 
 ./bin/tile_example_streamk_gemm_basic -prec=bf16 -m=1024 -n=1024 -k=1024 -warmup=500 -repeat=100 -v=1 
