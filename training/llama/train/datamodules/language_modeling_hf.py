@@ -44,7 +44,7 @@ class LMDataModule(LightningDataModule):
                  detokenize=False, val_only=False, batch_size=32, batch_size_eval=None, num_workers=1,
                  shuffle=False, pin_memory=False, drop_last=False, fault_tolerant=False, ddp=False,
                  fast_forward_epochs=None, fast_forward_batches=None,
-                 use_shmem=True):
+                 use_shmem=True, name=None):
         super().__init__()
         self.dataset_name = dataset_name
         self.dataset_config_name = dataset_config_name
@@ -61,7 +61,7 @@ class LMDataModule(LightningDataModule):
         self.num_workers = num_workers
         self.shuffle = shuffle
         self.pin_memory = pin_memory
-        self.drop_last = drop_last
+        self.drop_last = True # better for kernels
         if fault_tolerant:
             assert self.shuffle
         self.fault_tolerant = fault_tolerant

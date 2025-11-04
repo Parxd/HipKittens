@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - /experiment/pile/gpt3m-flash.yaml
-  - override /datamodule: wikitext103
+  - override /datamodule: slimpj6b
 
 train: 
   optimizer:
@@ -68,5 +68,5 @@ model:
     use_hip_attn: true
 
 
-expt_name: llama-1b-hk-h=${model.config.n_head}-hkv=${model.config.n_head_kv}-n_embd=${model.config.n_embd}-n_layer=${model.config.n_layer}-seq=${model.config.n_positions}
+expt_name: llama-1b-hk-data=${datamodule.name}-h=${model.config.n_head}-hkv=${model.config.n_head_kv}-n_embd=${model.config.n_embd}-n_layer=${model.config.n_layer}-seq=${model.config.n_positions}
 name: ${.expt_name}

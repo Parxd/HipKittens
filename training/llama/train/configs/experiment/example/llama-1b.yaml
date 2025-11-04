@@ -1,7 +1,7 @@
 # @package _global_
 defaults:
   - /experiment/pile/gpt3m-flash.yaml
-  - override /datamodule: wikitext103
+  - override /datamodule: slimpj6b
 
 train: 
   optimizer:
@@ -25,9 +25,6 @@ trainer:
   # to multiply by accumulate_grad_batches
   val_check_interval: ${eval:1000 * ${.accumulate_grad_batches}}
   max_steps: 20000
-
-expt_name: llama-1b-pytorch-head=16-hkv=8-bs=8-n=2048-d=2048
-name: ${.expt_name}
 
 resume: true
 
@@ -71,6 +68,6 @@ model:
     use_hip_attn: false
 
 
-expt_name: llama-1b-torch-h=${model.config.n_head}-hkv=${model.config.n_head_kv}-n_embd=${model.config.n_embd}-n_layer=${model.config.n_layer}-seq=${model.config.n_positions}
+expt_name: llama-1b-torch-data=${datamodule.name}-h=${model.config.n_head}-hkv=${model.config.n_head_kv}-n_embd=${model.config.n_embd}-n_layer=${model.config.n_layer}-seq=${model.config.n_positions}
 name: ${.expt_name}
 
