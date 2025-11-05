@@ -16,7 +16,7 @@ HIPFLAGS+= -DKITTENS_CDNA2 --offload-arch=gfx90a
 else ifeq ($(GPU_TARGET),CDNA3)
 HIPFLAGS+= -DKITTENS_CDNA3 --offload-arch=gfx942
 else ifeq ($(GPU_TARGET),CDNA4)
-HIPFLAGS+= -DKITTENS_CDNA4 --offload-arch=gfx950 -O3 -march=native -fopenmp -ffast-math --save-temps#-DHIP_ENABLE_GFX950_OCP_BUILTINS
+HIPFLAGS+= -DKITTENS_CDNA4 --offload-arch=gfx950 -O3 -march=native -fopenmp -ffast-math #--save-temps#-DHIP_ENABLE_GFX950_OCP_BUILTINS
 endif
 
 # Common variables and flags
