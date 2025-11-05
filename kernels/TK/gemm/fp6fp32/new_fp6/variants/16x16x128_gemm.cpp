@@ -152,16 +152,16 @@ void micro_tk(const micro_globals g) {
     prefill_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_M, K_STEP>, _gl_A, coord<st_f6<REG_BLOCK_M, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row, 0}, *As_ptrs[0], swizzled_offsets_A);
     prefill_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_N, K_STEP>, _gl_B, coord<st_f6<REG_BLOCK_N, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col, 0}, *Bs_ptrs[0], swizzled_offsets_B);
 
-    const uint32_t addrA0 = prefill_swizzled_offset_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[0], {warp_row, 0}));
-    const uint32_t addrA1 = prefill_swizzled_offset_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[1], {warp_row, 0}));
-    const uint32_t addrA2 = prefill_swizzled_offset_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[2], {warp_row, 0}));
-    const uint32_t addrA3 = prefill_swizzled_offset_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[3], {warp_row, 0}));
-    const uint32_t addrB0 = prefill_swizzled_offset_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[0], {warp_col, 0}));
-    const uint32_t addrB1 = prefill_swizzled_offset_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[1], {warp_col, 0}));
-    const uint32_t addrB2 = prefill_swizzled_offset_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[2], {warp_col, 0}));
-    const uint32_t addrB3 = prefill_swizzled_offset_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[3], {warp_col, 0}));
-    uint32_t addrA[4] = {addrA0, addrA1, addrA2, addrA3};
-    uint32_t addrB[4] = {addrB0, addrB1, addrB2, addrB3};
+    const uint32_t addrA = prefill_swizzled_offset_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[0], {warp_row, 0}));
+    // const uint32_t addrA1 = prefill_swizzled_offset_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[1], {warp_row, 0}));
+    // const uint32_t addrA2 = prefill_swizzled_offset_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[2], {warp_row, 0}));
+    // const uint32_t addrA3 = prefill_swizzled_offset_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[3], {warp_row, 0}));
+    const uint32_t addrB = prefill_swizzled_offset_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[0], {warp_col, 0}));
+    // const uint32_t addrB1 = prefill_swizzled_offset_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[1], {warp_col, 0}));
+    // const uint32_t addrB2 = prefill_swizzled_offset_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[2], {warp_col, 0}));
+    // const uint32_t addrB3 = prefill_swizzled_offset_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[3], {warp_col, 0}));
+    // uint32_t addrA[4] = {addrA0, addrA1, addrA2, addrA3};
+    // uint32_t addrB[4] = {addrB0, addrB1, addrB2, addrB3};
 
     load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_M, K_STEP>, _gl_A, coord<st_f6<REG_BLOCK_M, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row*2, 0}, *As_ptrs[tic*2], swizzled_offsets_A);
     load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_N, K_STEP>, _gl_B, coord<st_f6<REG_BLOCK_N, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col*2, 0}, *Bs_ptrs[tic*2], swizzled_offsets_B);
@@ -171,7 +171,7 @@ void micro_tk(const micro_globals g) {
     asm volatile("s_waitcnt vmcnt(9)");
     __builtin_amdgcn_s_barrier();
 
-    load_lds_reg_row_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2], {warp_row, 0}), addrA[tic*2]);
+    load_lds_reg_row_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2], {warp_row, 0}), addrA);
 
     load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_M, K_STEP>, _gl_A, coord<st_f6<REG_BLOCK_M, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row*2, 1}, *As_ptrs[toc*2], swizzled_offsets_A);
     load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_N, K_STEP>, _gl_B, coord<st_f6<REG_BLOCK_N, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col*2, 1}, *Bs_ptrs[toc*2], swizzled_offsets_B);
@@ -180,7 +180,7 @@ void micro_tk(const micro_globals g) {
     asm volatile("s_waitcnt vmcnt(15)");
     __builtin_amdgcn_s_barrier();
 
-    load_lds_reg_row_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[tic*2], {warp_col, 0}), addrB[tic*2]);
+    load_lds_reg_row_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[tic*2], {warp_col, 0}), addrB);
     load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_M, K_STEP>, _gl_A, coord<st_f6<REG_BLOCK_M, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row*2+1, 1}, *As_ptrs[toc*2+1], swizzled_offsets_A);
 
     asm volatile("s_waitcnt lgkmcnt(0)");
@@ -190,7 +190,7 @@ void micro_tk(const micro_globals g) {
     #pragma unroll
     for (int tile = 0; tile < num_tiles - 2; ++tile, tic ^= 1, toc ^= 1) {
         load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_M, K_STEP>, _gl_A, coord<st_f6<REG_BLOCK_M, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row*2, tile+2}, *As_ptrs[tic*2], swizzled_offsets_A);
-        load_lds_reg_row_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[tic*2+1], {warp_col, 0}), addrB[tic*2+1]);
+        load_lds_reg_row_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[tic*2+1], {warp_col, 0}), addrB);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[0][0], A_tile[0], B_tile[0], C_accum[0][0]);
         __builtin_amdgcn_sched_barrier(0);
@@ -198,7 +198,7 @@ void micro_tk(const micro_globals g) {
         asm volatile("s_waitcnt lgkmcnt(0)");
 
         load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_N, K_STEP>, _gl_B, coord<st_f6<REG_BLOCK_N, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col*2, tile+2}, *Bs_ptrs[tic*2], swizzled_offsets_B);
-        load_lds_reg_row_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA[tic*2+1]);
+        load_lds_reg_row_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[0][1], A_tile[0], B_tile[1], C_accum[0][1]);
         __builtin_amdgcn_sched_barrier(0);
@@ -208,7 +208,7 @@ void micro_tk(const micro_globals g) {
         __builtin_amdgcn_s_barrier();
 
         load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_N, K_STEP>, _gl_B, coord<st_f6<REG_BLOCK_N, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col*2+1, tile+2}, *Bs_ptrs[tic*2+1], swizzled_offsets_B);
-        load_lds_reg_row_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[toc*2], {warp_row, 0}), addrA[toc*2]);
+        load_lds_reg_row_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[toc*2], {warp_row, 0}), addrA);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[1][0], A_tile[1], B_tile[0], C_accum[1][0]);
         __builtin_amdgcn_sched_barrier(0);
@@ -216,7 +216,7 @@ void micro_tk(const micro_globals g) {
         asm volatile("s_waitcnt lgkmcnt(0)");
 
         load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_M, K_STEP>, _gl_A, coord<st_f6<REG_BLOCK_M, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row*2+1, tile+2}, *As_ptrs[tic*2+1], swizzled_offsets_A);
-        load_lds_reg_row_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[toc*2], {warp_col, 0}), addrB[toc*2]);
+        load_lds_reg_row_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[toc*2], {warp_col, 0}), addrB);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[1][1], A_tile[1], B_tile[1], C_accum[1][1]);
         __builtin_amdgcn_sched_barrier(0);
@@ -227,14 +227,14 @@ void micro_tk(const micro_globals g) {
     }
     // epilogue num_tiles - 2
     {
-        load_lds_reg_row_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[tic*2+1], {warp_col, 0}), addrB[tic*2+1]);
+        load_lds_reg_row_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[tic*2+1], {warp_col, 0}), addrB);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[0][0], A_tile[0], B_tile[0], C_accum[0][0]);
         __builtin_amdgcn_sched_barrier(0);
 
         asm volatile("s_waitcnt lgkmcnt(0)");
 
-        load_lds_reg_row_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA[tic*2+1]);
+        load_lds_reg_row_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[0][1], A_tile[0], B_tile[1], C_accum[0][1]);
         __builtin_amdgcn_sched_barrier(0);
@@ -243,14 +243,14 @@ void micro_tk(const micro_globals g) {
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_s_barrier();
 
-        load_lds_reg_row_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[toc*2], {warp_row, 0}), addrA[toc*2]);
+        load_lds_reg_row_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[toc*2], {warp_row, 0}), addrA);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[1][0], A_tile[1], B_tile[0], C_accum[1][0]);
         __builtin_amdgcn_sched_barrier(0);
 
         asm volatile("s_waitcnt lgkmcnt(0)");
 
-        load_lds_reg_row_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[toc*2], {warp_col, 0}), addrB[toc*2]);
+        load_lds_reg_row_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[toc*2], {warp_col, 0}), addrB);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[1][1], A_tile[1], B_tile[1], C_accum[1][1]);
         __builtin_amdgcn_sched_barrier(0);
@@ -263,14 +263,14 @@ void micro_tk(const micro_globals g) {
     }
     // epilogue num_tiles - 1
     {
-        load_lds_reg_row_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[tic*2+1], {warp_col, 0}), addrB[tic*2+1]);
+        load_lds_reg_row_fp6(B_tile[1], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[tic*2+1], {warp_col, 0}), addrB);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[0][0], A_tile[0], B_tile[0], C_accum[0][0]);
         __builtin_amdgcn_sched_barrier(0);
 
         asm volatile("s_waitcnt lgkmcnt(0)");
 
-        load_lds_reg_row_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA[tic*2+1]);
+        load_lds_reg_row_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA);
         __builtin_amdgcn_sched_barrier(0);
         mma_ABt(C_accum[0][1], A_tile[0], B_tile[1], C_accum[0][1]);
         __builtin_amdgcn_sched_barrier(0);
@@ -317,7 +317,7 @@ constexpr int ROTATING_BUFFER_COUNT = ((((1024*1024)/M)*512)/K)/2; // 500 MiB
 // Random initialization function
 void random_init(din* a_host, din* b_host, uint32_t seed = 42) {
     std::mt19937 gen(seed); // Seed for reproducibility
-    std::uniform_real_distribution<float> dis(-0.0f, 4.0f);
+    std::normal_distribution<float> dis(-1.0f, 1.0f);
     // #pragma omp parallel for
     for (int i = 0; i < M*K; i++) {
         a_host[i] = din(dis(gen));

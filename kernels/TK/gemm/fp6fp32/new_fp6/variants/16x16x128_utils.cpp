@@ -258,7 +258,7 @@ __device__ inline static uint32_t prefill_swizzled_offset_fp6(RT &dst, const ST 
 
     using U  = ST::dtype;
     const int laneid = kittens::laneid() % kittens::WARP_THREADS;
-    auto* lds_bytes = reinterpret_cast<const uint8_t*>(&src.data[0]);
+    // auto* lds_bytes = reinterpret_cast<const uint8_t*>(&src.data[0]);
 
     const int row_offset = laneid % 16;
     const int col_offset = 32 * (laneid / 16);
@@ -273,8 +273,9 @@ __device__ inline static uint32_t prefill_swizzled_offset_fp6(RT &dst, const ST 
     // const int right = (byte_offset % (96)) / 48;
     // byte_offset += bottom * 48 * (1 - (2 * right));
 
-    const uint32_t addr = reinterpret_cast<uintptr_t>(lds_bytes + byte_offset);
-    return addr;
+    // const uint32_t addr = reinterpret_cast<uintptr_t>(lds_bytes + byte_offset);
+    // return addr;
+    return byte_offset;
 }
 
 /**
@@ -292,6 +293,10 @@ __device__ inline static void load_lds_reg_row_fp6(RT &dst, const ST &src, uint3
 
     const int tile_stride = (kittens::TILE_ROW_DIM<U> * kittens::TILE_COL_DIM<U> * 6 / 8);
     const int row_stride = tile_stride * src.underlying_width;
+
+    uint32_t lds_bytes = reinterpret_cast<uintptr_t>(&src.data[0]);
+
+    addr = lds_bytes + addr;
 
     #pragma unroll
     for(int i = 0; i < dst.height; i++) {
