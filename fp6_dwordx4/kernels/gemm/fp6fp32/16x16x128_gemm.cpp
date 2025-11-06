@@ -84,39 +84,37 @@ struct micro_globals {
 template<typename ST_GL, typename GL_GL, typename ST_RT, typename RT_RT, typename RT_A, typename RT_B, typename RT_C, ducks::coord::tile COORD=coord<ST_GL>>
 __device__ __forceinline__ static void do_interleaved_cluster(ST_GL& dst_gl, const GL_GL& src_gl, uintptr_t* swizzled_offsets, COORD idx, RT_RT& dst_rt, const ST_RT& src_rt, uint32_t st_to_rt_addr, RT_A& a, RT_B& b, RT_C& c) {
     precomputed_addresses addresses = precompute_addresses_fp6(dst_gl, src_gl, idx);
-    load_one<0, NUM_THREADS>(dst_gl, src_gl, swizzled_offsets, addresses);
-    load_one<1, NUM_THREADS>(dst_gl, src_gl, swizzled_offsets, addresses);
-    load_one<2, NUM_THREADS>(dst_gl, src_gl, swizzled_offsets, addresses);
-    load_one<0, 0, 0>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<0, 0, 1>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<0, 0, 2>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<1, 0, 0>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<1, 0, 1>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<1, 0, 2>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<2, 0, 0>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<2, 0, 1>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<2, 0, 2>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<3, 0, 0>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<3, 0, 1>(dst_rt, src_rt, st_to_rt_addr);
-    load_one<3, 0, 2>(dst_rt, src_rt, st_to_rt_addr);
-    __builtin_amdgcn_sched_barrier(0);
     mma_ABt_one<0, 0, 0>(c, a, b, c);
+    load_one<0, NUM_THREADS>(dst_gl, src_gl, swizzled_offsets, addresses);
     mma_ABt_one<0, 1, 0>(c, a, b, c);
+    load_one<0, 0, 0>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<0, 2, 0>(c, a, b, c);
+    load_one<0, 0, 1>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<0, 3, 0>(c, a, b, c);
+    load_one<0, 0, 2>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<1, 0, 0>(c, a, b, c);
+    load_one<1, 0, 0>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<1, 1, 0>(c, a, b, c);
+    load_one<1, NUM_THREADS>(dst_gl, src_gl, swizzled_offsets, addresses);
     mma_ABt_one<1, 2, 0>(c, a, b, c);
+    load_one<1, 0, 1>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<1, 3, 0>(c, a, b, c);
+    load_one<1, 0, 2>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<2, 0, 0>(c, a, b, c);
+    load_one<2, 0, 0>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<2, 1, 0>(c, a, b, c);
+    load_one<2, 0, 1>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<2, 2, 0>(c, a, b, c);
+    load_one<2, NUM_THREADS>(dst_gl, src_gl, swizzled_offsets, addresses);
     mma_ABt_one<2, 3, 0>(c, a, b, c);
+    load_one<2, 0, 2>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<3, 0, 0>(c, a, b, c);
+    load_one<3, 0, 0>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<3, 1, 0>(c, a, b, c);
+    load_one<3, 0, 1>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<3, 2, 0>(c, a, b, c);
+    load_one<3, 0, 2>(dst_rt, src_rt, st_to_rt_addr);
     mma_ABt_one<3, 3, 0>(c, a, b, c);
-    __builtin_amdgcn_sched_barrier(0);
 }
 
 __global__ __launch_bounds__(NUM_THREADS, 1)
@@ -238,12 +236,12 @@ void micro_tk(const micro_globals g) {
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
 
-        load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_N, K_STEP>, _gl_B, coord<st_f6<REG_BLOCK_N, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col*2, tile+2}, *Bs_ptrs[tic*2], swizzled_offsets_B);
-        load_lds_reg_row_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA);
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(C_accum[0][1], A_tile[0], B_tile[1], C_accum[0][1]);
-        __builtin_amdgcn_sched_barrier(0);
-        // do_interleaved_cluster(*Bs_ptrs[tic*2], g.b, swizzled_offsets_B, {0, 0, col*2, tile+2}, A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA, A_tile[0], B_tile[1], C_accum[0][1]);
+        // load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_N, K_STEP>, _gl_B, coord<st_f6<REG_BLOCK_N, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col*2, tile+2}, *Bs_ptrs[tic*2], swizzled_offsets_B);
+        // load_lds_reg_row_fp6(A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA);
+        // __builtin_amdgcn_sched_barrier(0);
+        // mma_ABt(C_accum[0][1], A_tile[0], B_tile[1], C_accum[0][1]);
+        // __builtin_amdgcn_sched_barrier(0);
+        do_interleaved_cluster(*Bs_ptrs[tic*2], g.b, swizzled_offsets_B, {0, 0, col*2, tile+2}, A_tile[1], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[tic*2+1], {warp_row, 0}), addrA, A_tile[0], B_tile[1], C_accum[0][1]);
 
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt vmcnt(12)");
@@ -251,22 +249,22 @@ void micro_tk(const micro_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_N, K_STEP>, _gl_B, coord<st_f6<REG_BLOCK_N, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col*2+1, tile+2}, *Bs_ptrs[tic*2+1], swizzled_offsets_B);
-        load_lds_reg_row_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[toc*2], {warp_row, 0}), addrA);
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(C_accum[1][0], A_tile[1], B_tile[0], C_accum[1][0]);
-        __builtin_amdgcn_sched_barrier(0);
-        // do_interleaved_cluster(*Bs_ptrs[tic*2+1], g.b, swizzled_offsets_B, {0, 0, col*2+1, tile+2}, A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[toc*2], {warp_row, 0}), addrA, A_tile[1], B_tile[0], C_accum[1][0]);
+        // load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_N, K_STEP>, _gl_B, coord<st_f6<REG_BLOCK_N, K_STEP>>, NUM_THREADS>(g.b, {0, 0, col*2+1, tile+2}, *Bs_ptrs[tic*2+1], swizzled_offsets_B);
+        // load_lds_reg_row_fp6(A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[toc*2], {warp_row, 0}), addrA);
+        // __builtin_amdgcn_sched_barrier(0);
+        // mma_ABt(C_accum[1][0], A_tile[1], B_tile[0], C_accum[1][0]);
+        // __builtin_amdgcn_sched_barrier(0);
+        do_interleaved_cluster(*Bs_ptrs[tic*2+1], g.b, swizzled_offsets_B, {0, 0, col*2+1, tile+2}, A_tile[0], subtile_inplace<REG_BLOCK_M/2, K_STEP>(*As_ptrs[toc*2], {warp_row, 0}), addrA, A_tile[1], B_tile[0], C_accum[1][0]);
 
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
 
-        load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_M, K_STEP>, _gl_A, coord<st_f6<REG_BLOCK_M, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row*2+1, tile+2}, *As_ptrs[tic*2+1], swizzled_offsets_A);
-        load_lds_reg_row_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[toc*2], {warp_col, 0}), addrB);
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(C_accum[1][1], A_tile[1], B_tile[1], C_accum[1][1]);
-        __builtin_amdgcn_sched_barrier(0);
-        // do_interleaved_cluster(*As_ptrs[tic*2+1], g.a, swizzled_offsets_A, {0, 0, row*2+1, tile+2}, B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[toc*2], {warp_col, 0}), addrB, A_tile[1], B_tile[1], C_accum[1][1]);
+        // load_global_to_shared_direct_with_swizzled_offsets_fp6<2, false, st_f6<REG_BLOCK_M, K_STEP>, _gl_A, coord<st_f6<REG_BLOCK_M, K_STEP>>, NUM_THREADS>(g.a, {0, 0, row*2+1, tile+2}, *As_ptrs[tic*2+1], swizzled_offsets_A);
+        // load_lds_reg_row_fp6(B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[toc*2], {warp_col, 0}), addrB);
+        // __builtin_amdgcn_sched_barrier(0);
+        // mma_ABt(C_accum[1][1], A_tile[1], B_tile[1], C_accum[1][1]);
+        // __builtin_amdgcn_sched_barrier(0);
+        do_interleaved_cluster(*As_ptrs[tic*2+1], g.a, swizzled_offsets_A, {0, 0, row*2+1, tile+2}, B_tile[0], subtile_inplace<REG_BLOCK_N/2, K_STEP>(*Bs_ptrs[toc*2], {warp_col, 0}), addrB, A_tile[1], B_tile[1], C_accum[1][1]);
 
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt vmcnt(12)");
