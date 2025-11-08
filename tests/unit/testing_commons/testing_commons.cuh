@@ -272,9 +272,9 @@ template<typename T> using st_shape = typename st_shape_wrapper<T>::st_shape;
 
 // ----- 1D Wrappers -----
 
-template<typename Ker, typename RT_SHAPE, typename ST_SHAPE, int S, int NW, kittens::ducks::gl::all GL, typename... args>
+template<typename Ker, typename RT_SHAPE, typename ST_SHAPE, typename dtype, int S, int NW, kittens::ducks::gl::all GL, typename... args>
 static __global__ void global_wrapper_1d(GL input, const GL output) {
-    Ker::template device_func<RT_SHAPE, ST_SHAPE, S, NW, GL, args...>(input, output);
+    Ker::template device_func<RT_SHAPE, ST_SHAPE, dtype, S, NW, GL, args...>(input, output);
 }
 template<typename test, typename RT_SHAPE, typename ST_SHAPE, int S, int NUM_WORKERS, typename... args>
 struct wrapper_1d {
@@ -295,11 +295,11 @@ struct wrapper_1d {
             GL output(d_o, nullptr, nullptr, nullptr, nullptr);
             // run kernel
             hipFuncSetAttribute(
-                reinterpret_cast<void *>(global_wrapper_1d<test, dtype, S, NUM_WORKERS, GL, args...>),
+                reinterpret_cast<void *>(global_wrapper_1d<test, RT_SHAPE, ST_SHAPE, dtype, S, NUM_WORKERS, GL, args...>),
                 hipFuncAttributeMaxDynamicSharedMemorySize,
                 kittens::MAX_SHARED_MEMORY / 2
             );
-            global_wrapper_1d<test, dtype, S, NUM_WORKERS, GL, args...><<<1, NUM_WORKERS*kittens::WARP_THREADS, kittens::MAX_SHARED_MEMORY / 2>>>(input, output);
+            global_wrapper_1d<test, RT_SHAPE, ST_SHAPE, dtype, S, NUM_WORKERS, GL, args...><<<1, NUM_WORKERS*kittens::WARP_THREADS, kittens::MAX_SHARED_MEMORY / 2>>>(input, output);
             // fill in correct results on cpu
             test::template host_func<RT_SHAPE, ST_SHAPE, S, NUM_WORKERS, GL, args...>(i_ref, o_ref);
             // check and cleanup

@@ -61,7 +61,7 @@ struct rv {
     static constexpr int length = _length; ///< Length in elements.
     static_assert(length % _tile_length == 0, "Length must be divisible by the tile dimension");
     static constexpr int tiles  = _length / _tile_length; ///< Length in subtiles, aliased for consistency with sv type
-    static constexpr int inner_dim = is_naive ? length / kittens::WARP_THREADS : (is_ortho ? 1 : _shape::elements_per_thread / packing);
+    static constexpr int inner_dim = is_naive ? ((length + kittens::WARP_THREADS - 1) / kittens::WARP_THREADS) : (is_ortho ? 1 : _shape::elements_per_thread / packing);
     static constexpr int outer_dim = is_naive ? 1 : tiles;
 
     // For align layout
