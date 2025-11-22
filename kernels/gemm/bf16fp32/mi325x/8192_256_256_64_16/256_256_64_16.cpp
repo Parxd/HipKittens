@@ -2,7 +2,7 @@
 #include "pyutils/pyutils.cuh"
 using namespace kittens;
 
-constexpr int BLOCK_SIZE       = 256;  
+constexpr int BLOCK_SIZE       = 256;
 constexpr int K_STEP           = 64;
 constexpr int REG_BLOCK        = BLOCK_SIZE / 4;
 constexpr int DOT_SLICE        = 16;
@@ -26,8 +26,8 @@ struct micro_globals {
     _gl_B b;
     _gl_C c;
     hipStream_t stream;
-    dim3 grid()  { return dim3((N / BLOCK_SIZE) * (M / BLOCK_SIZE)); } 
-    dim3 block() { return dim3(NUM_THREADS); } 
+    dim3 grid()  { return dim3((N / BLOCK_SIZE) * (M / BLOCK_SIZE)); }
+    dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return 65536; }
 };
 
@@ -57,8 +57,8 @@ void micro_tk(const micro_globals g) {
     int pid_m = first_pid_m + ((wgid % num_wgid_in_group) % group_size_m);
     int pid_n = (wgid % num_wgid_in_group) / group_size_m;
     // Assign the tile's row/column based on the pid_m and pid_n.
-    const int row = pid_m; 
-    const int col = pid_n; 
+    const int row = pid_m;
+    const int col = pid_n;
 
 
     const int warp_id = kittens::warpid();
@@ -82,8 +82,8 @@ void micro_tk(const micro_globals g) {
         // Small register buffers for pipelining
         // This is used instead of register tiles to enable the use of maximally coalesced global loads.
         constexpr int BUFFER_SIZE = (BLOCK_SIZE * K_STEP) / NUM_THREADS;
-        float4 a_buffer_next[BUFFER_SIZE];
-        float4 b_buffer_next[BUFFER_SIZE];
+        float4 a_buffer_next[BUFFER_SIZE * sizeof(bf16) / sizeof(float4)];
+        float4 b_buffer_next[BUFFER_SIZE * sizeof(bf16) / sizeof(float4)];
 
         // Cluster 0
         load_global_to_register_buffer<2, false, NUM_THREADS>(a_buffer_next, BUFFER_SIZE, g.a, {0, 0, row, tile + 1}, As);
@@ -151,7 +151,7 @@ void micro_tk(const micro_globals g) {
         __builtin_amdgcn_s_setprio(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
-        
+
     }
 
     // Epilogue
@@ -163,7 +163,7 @@ void micro_tk(const micro_globals g) {
     asm volatile("s_waitcnt lgkmcnt(0)");
     __builtin_amdgcn_s_barrier();
     __builtin_amdgcn_sched_barrier(0);
-    
+
 
     // Cluster 1
     __builtin_amdgcn_s_setprio(1);
@@ -232,6 +232,6 @@ void dispatch_micro(micro_globals g) {
 
 PYBIND11_MODULE(tk_kernel, m) {
     m.doc() = "tk_kernel python module";
-    py::bind_kernel<micro_tk>(m, "micro_tk", &micro_globals::a, &micro_globals::b, &micro_globals::c); 
+    py::bind_kernel<micro_tk>(m, "micro_tk", &micro_globals::a, &micro_globals::b, &micro_globals::c);
     py::bind_function<dispatch_micro>(m, "dispatch_micro", &micro_globals::a, &micro_globals::b, &micro_globals::c);
 }
