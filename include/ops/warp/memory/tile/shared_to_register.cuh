@@ -60,8 +60,8 @@ __device__ inline static void load(RT &dst, const ST &src) {
 
                 if constexpr (sizeof(typename ST::dtype) == 4) {
                     // handle float32
-                    float2 loaded0 = load_shared_vec_sync(src.idx(src_ptr, {row, col}));
-                    float2 loaded1 = load_shared_vec_sync(src.idx(src_ptr, {row, col+2}));
+                    float2 loaded0 = load_shared_vec(src.idx(src_ptr, {row, col}));
+                    float2 loaded1 = load_shared_vec(src.idx(src_ptr, {row, col+2}));
                     dst.tiles[i][j].data[0] = base_types::convertor<T2, U2>::convert(loaded0);
                     dst.tiles[i][j].data[1] = base_types::convertor<T2, U2>::convert(loaded1);
                 } else {
