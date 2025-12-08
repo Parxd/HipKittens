@@ -2,6 +2,10 @@
 GPU_TARGET=CDNA3
 
 TARGET=tk_kernel
+
+# ThunderKittens root (override with env)
+THUNDERKITTENS_ROOT ?= $(abspath ../../../../../)
+
 SRC=256_256_64_16.cpp
 
 # HIP variables
