@@ -48,12 +48,14 @@ void micro_tk(const micro_globals g) {
     constexpr int WGM = 4;
     // Swizzle chiplet so that wgids are in the same XCD.
     wgid = chiplet_transform_chunked(wgid, NUM_WGS, NUM_XCDS, WGM*WGM);
-    // Swizzle for better L2 within the same XCD.
-    const int num_pid = ceil_div(M, BLOCK_SIZE);
-    int num_wgid_in_group = WGM * num_pid;
+    // Swizzle for better L2 within the same XCD. Use separate M/N tiling sizes
+    // so rectangular grids don't generate out-of-bounds columns.
+    const int num_pid_m = ceil_div(M, BLOCK_SIZE);
+    const int num_pid_n = ceil_div(N, BLOCK_SIZE);
+    int num_wgid_in_group = WGM * num_pid_n;
     int group_id = wgid / num_wgid_in_group;
     int first_pid_m = group_id * WGM;
-    int group_size_m = min(num_pid - first_pid_m, WGM);
+    int group_size_m = min(num_pid_m - first_pid_m, WGM);
     int pid_m = first_pid_m + ((wgid % num_wgid_in_group) % group_size_m);
     int pid_n = (wgid % num_wgid_in_group) / group_size_m;
     // Assign the tile's row/column based on the pid_m and pid_n.
