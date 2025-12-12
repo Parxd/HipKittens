@@ -3,7 +3,7 @@
 # to spend a *long* time compiling. (like, HOURS single-threaded.)
 
 # GPU Selection: Set to MI300X
-GPU_TARGET=CDNA4
+GPU_TARGET=CDNA3
 COMP_LEVEL=profile
 
 GPU_RUNTIME := HIP
