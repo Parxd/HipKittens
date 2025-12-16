@@ -25,6 +25,7 @@ podman run -it \
 
 ```terminal
 apt-get install -y libopenmpi-dev openmpi-bin
+pip install mpi4py
 ```
 
 ## Build and Run
@@ -37,6 +38,8 @@ cmake -B build -DDK_BUILD=bf16_gemm
 # Implements the actual GPU kernel(s) and pybind11 bindings for the tk_kernel Python module, targeting a specific CDNA architecture.
 cmake --build build -j 16
 
-# Runs the kernel
+# Runs the kernel (single GPU)
 python3 example.py
+# Multi-GPU (8 GPUs)
+mpirun --allow-run-as-root -np 8 python example.py
 ```

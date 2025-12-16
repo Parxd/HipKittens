@@ -21,10 +21,6 @@ using G = kittens::group<NUM_PRODUCER_WORKERS>;
 using A_slice = rt_bf<HALF_BLOCK_SIZE, BLOCK_SIZE, row_l, rt_16x32_s>;
 using B_slice = rt_bf<HALF_BLOCK_SIZE, BLOCK_SIZE, row_l, rt_16x32_s>;
 
-#define M 192*40
-#define K 8192
-#define N 8192
-
 template<int axis, ducks::rt::col_layout RT, ducks::gl::all GL, ducks::coord::tile COORD=coord<RT>>
 __device__ inline static void kittens_store(const GL &dst, const RT &src, const COORD &idx, iris::iris_device_view& iris_ctx) {
     using T = base_types::packing<typename RT::dtype>::unpacked_type;
@@ -75,13 +71,19 @@ __device__ inline static void kittens_store(const GL &dst, const RT &src, const 
 
 
 struct micro_globals {
-    gl<bf16, -1, -1, -1, -1> a, b;
-    gl<bf16, -1, -1, -1, -1> c;
+    gl<bf16, -1, -1, -1, -1> a, b, c;
     iris::iris_device_view iris_ctx;
+
+    int M_local;
+    int N;
+    int K;
+    int row_offset;   // in elements (rows), not tiles
+
     hipStream_t stream;
-    dim3 grid()  { return dim3(N / NEW_COL_BLOCK_SIZE, M / NEW_ROW_BLOCK_SIZE); } 
-    dim3 block() { return dim3(NUM_THREADS); } 
-    size_t dynamic_shared_memory() { return 98304; } 
+    dim3 grid()  { return dim3(ceil_div(N, NEW_COL_BLOCK_SIZE),
+                              ceil_div(M_local, NEW_ROW_BLOCK_SIZE)); }
+    dim3 block() { return dim3(NUM_THREADS); }
+    size_t dynamic_shared_memory() { return 98304; }
 };
 
 __global__ __launch_bounds__(NUM_THREADS, 2)
@@ -104,8 +106,8 @@ void micro_tk(micro_globals g) {
     // Swizzle chiplet so that wgids are in the same XCD.
     wgid = chiplet_transform_chunked(wgid, NUM_WGS, NUM_XCDS, WGM*WGM);
     // Swizzle for better L2 within the same XCD.
-    const int num_pid_m = ceil_div(M, NEW_ROW_BLOCK_SIZE); // 7680 / 192 = 40
-    const int num_pid_n = ceil_div(N, NEW_COL_BLOCK_SIZE); // 7680 / 256 = 30
+    const int num_pid_m = ceil_div(g.M_local, NEW_ROW_BLOCK_SIZE); // 7680 / 192 = 40
+    const int num_pid_n = ceil_div(g.N, NEW_COL_BLOCK_SIZE); // 7680 / 256 = 30
     const int num_wgid_in_group = WGM * num_pid_n;
     int group_id = wgid / num_wgid_in_group;
     int first_pid_m = group_id * WGM;
@@ -132,6 +134,7 @@ void micro_tk(micro_globals g) {
     G::prefill_swizzled_offsets(As[0][0][0], g.a, swizzled_offsets_A);
     G::prefill_swizzled_offsets(Bs[0][0][0], g.b, swizzled_offsets_B);
     
+    
     int tic = 0;
     int toc = 1;
     if (is_producer) {
@@ -156,7 +159,7 @@ void micro_tk(micro_globals g) {
         zero(C_accum[1][0]); 
         zero(C_accum[1][1]);
     }
-    constexpr int num_tiles = K / BLOCK_SIZE;
+    int num_tiles = g.K / BLOCK_SIZE;
     #pragma unroll
     for (int tile = 0; tile < num_tiles-1; ++tile, tic ^= 1, toc ^= 1) {
 
@@ -250,6 +253,14 @@ void dispatch_micro(micro_globals g) {
 PYBIND11_MODULE(tk_kernel, m) {
     m.doc() = "tk_kernel python module";
     py::bind_function<dispatch_micro>(m, "dispatch_micro", 
-        &micro_globals::a, &micro_globals::b, &micro_globals::c, &micro_globals::iris_ctx);
+        &micro_globals::a, 
+        &micro_globals::b, 
+        &micro_globals::c,
+        &micro_globals::iris_ctx,
+        &micro_globals::M_local,
+        &micro_globals::N,
+        &micro_globals::K,
+        &micro_globals::row_offset
+    );
 }
 

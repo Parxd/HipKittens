@@ -62,53 +62,90 @@ K = 8192
 N = 8192
 scale = 10.0
 
-print("="*50)
-print(f"Distributed Producer-Consumer GEMM: {M}x{K} @ {K}x{N}")
-print("="*50)
-
-# Initialize iris
-print("\n[Initializing Iris]")
 iris = iris_py.Iris(heap_size_mb=512, verbose=False)
-print(f"✓ Iris initialized: rank={iris.rank()}, world_size={iris.world_size()}")
+rank = iris.rank()
+world_size = iris.world_size()
+torch.cuda.set_device(rank)
+
+M_local = M // world_size
+K_local = K
+N_local = N
+
+if rank == 0:
+    print("="*50)
+    print(f"Distributed Producer-Consumer GEMM: {M}x{K} @ {K}x{N}")
+    print("="*50)
 
 # Allocate tensors using helper function
-print("\n[Allocating Iris Tensors]")
-A = make_iris_tensor(iris, [M, K], dtype="bfloat16")
+if rank == 0:
+    print("\n[Allocating Iris Tensors]")
+A = make_iris_tensor(iris, [M_local, K], dtype="bfloat16")
 B = make_iris_tensor(iris, [N, K], dtype="bfloat16")
-C = make_iris_tensor(iris, [M, N], dtype="bfloat16")
-
-print(f"✓ A: {A.shape}, device={A.device}, dtype={A.dtype}")
-print(f"✓ B: {B.shape}, device={B.device}, dtype={B.dtype}")
-print(f"✓ C: {C.shape}, device={C.device}, dtype={C.dtype}")
+C = make_iris_tensor(iris, [M_local, N], dtype="bfloat16")
+if rank == 0:
+    print(f"✓ A: {A.shape}, device={A.device}, dtype={A.dtype}")
+    print(f"✓ B: {B.shape}, device={B.device}, dtype={B.dtype}")
+    print(f"✓ C: {C.shape}, device={C.device}, dtype={C.dtype}")
 
 # Initialize in-place
-print("\n[Initializing In-Place]")
-A.copy_(torch.randn(M, K, dtype=torch.bfloat16, device='cuda') / scale)
+if rank == 0:
+    print("\n[Initializing In-Place]")
+torch.manual_seed(1234 + rank)
+A.copy_(torch.randn(M_local, K, dtype=torch.bfloat16, device='cuda') / scale)
+torch.manual_seed(0)
 B.copy_(torch.randn(N, K, dtype=torch.bfloat16, device='cuda') / scale)
 C.zero_()
-print(f"✓ Tensors initialized")
-
+if rank == 0:
+    print(f"✓ Tensors initialized")
 iris.barrier()
 
 # Use tensors directly - they're already PyTorch tensors!
-print("\n[Computing Reference]")
+if rank == 0:
+    print("\n[Computing Reference]")
 C_ref = torch.matmul(A, B.t())
 
-print("\n[Running HipKittens Kernel]")
+if rank == 0:
+    print("\n[Running HipKittens Kernel]")
 # Get iris device context and pass to kernel
 iris_device_ctx = iris.get_device_view()
-tk_kernel.dispatch_micro(A, B, C, iris_device_ctx)
+row_offset = rank * M_local
+tk_kernel.dispatch_micro(A, B, C, iris_device_ctx, M_local, N, K, row_offset)
 torch.cuda.synchronize()
+iris.barrier()
 
 # Validation
-print("\n[Validating Results]")
+if rank == 0:
+    print("\n[Validating Results]")
 diff = (C.float() - C_ref.float()).abs()
 max_error = diff.max().item()
-
-print(f"Max error: {max_error:.6f}")
 status = "✓ PASSED" if max_error < 0.1 else "✗ FAILED"
-print(status)
+print(f"Rank {rank}: Max error: {max_error:.6f}, {status}")
 
-print("\n" + "="*50)
-print("Done!")
-print("="*50)
+if rank == 0:
+    print("\n" + "="*50)
+    print("Done!")
+    print("="*50)
+
+# Cleanup and exit
+import gc
+from mpi4py import MPI
+# Delete GPU tensors first
+del A, B, C
+del C_ref
+# Sync and garbage collect
+gc.collect()
+torch.cuda.synchronize()
+# Clean up iris
+iris.barrier()
+del iris_device_ctx
+del iris
+# Final garbage collection
+gc.collect()
+torch.cuda.synchronize()
+# Finalize MPI properly
+MPI.Finalize()
+# Now safe to hard exit 
+import os
+os._exit(0)
+
+
