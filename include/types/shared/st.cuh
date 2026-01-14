@@ -184,4 +184,5 @@ template<int _height, int _width, ducks::st_shape::all _shape> using st_bf = st<
 template<int _height, int _width, ducks::st_shape::all _shape> using st_hf = st<half,  _height, _width, _shape>;
 template<int _height, int _width, ducks::st_shape::all _shape> using st_fl = st<float, _height, _width, _shape>;
 template<int _height, int _width, ducks::st_shape::all _shape> using st_fp8e4m3 = st<fp8e4m3, _height, _width, _shape>;
+template<int _height, int _width, ducks::st_shape::all _shape> using st_fp8e8m0 = st<fp8e8m0, _height, _width, _shape>;
 }
