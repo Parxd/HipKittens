@@ -95,6 +95,48 @@ __device__ inline static void load_one(ST& dst, const GL& src, precomputed_addre
         static_cast<int>(coherency::cache_all)); // cache coherency
 }
 
+template<typename ST, typename GL>
+__device__ inline static void load_one_scale(ST& dst, const GL& src, const coord<GL>& idx) {
+    constexpr int axis = 2;
+
+    const int N_THREADS = kittens::num_warps()*kittens::WARP_THREADS; // 64*4 = 256
+
+    using T = typename ST::dtype; // fp8e8m0
+
+    constexpr int bytes_per_thread = ST::underlying_subtile_bytes_per_thread; // 4*256/256 = 4
+    constexpr int bytes_per_warp = bytes_per_thread * kittens::WARP_THREADS; // 4*64 = 256
+    static_assert(ST::rows * ST::cols * sizeof(T) >= bytes_per_warp, "shared tile must be at least 1024 bytes");
+
+    const int num_warps = N_THREADS / kittens::WARP_THREADS;
+    const int laneid = kittens::laneid();
+    const int warpid = kittens::warpid() % num_warps;
+
+    const int row_stride = src.template stride<axis>();
+
+    const int lane_byte_offset = (laneid * bytes_per_thread) + (warpid * bytes_per_warp); // don't need more than one load for this shape - TODO: to support other shapes, need to add i here
+    // missing some logic here because we don't have subtiles
+    const int row = lane_byte_offset / ST::underlying_subtile_row_bytes;
+    const int col = (lane_byte_offset % ST::underlying_subtile_row_bytes) / sizeof(T);
+
+    const uint32_t global_byte_offset = (row * row_stride + col) * sizeof(T);
+
+    uintptr_t lds_addr = reinterpret_cast<uintptr_t>(&dst.data[0]) + (warpid * bytes_per_warp);
+    as3_uint32_ptr lds_ptr = (as3_uint32_ptr)(lds_addr);
+
+    coord<> unit_coord = idx.template unit_coord<axis, 3>();
+    T* global_ptr = (T*)&src[unit_coord];
+    i32x4 srsrc = make_srsrc(global_ptr, row_stride * ST::rows * sizeof(T));
+
+    llvm_amdgcn_raw_buffer_load_lds(
+        srsrc, // buffer resource
+        lds_ptr,
+        bytes_per_thread,
+        global_byte_offset,
+        0,
+        0, // instruction offset
+        static_cast<int>(coherency::cache_all)); // cache coherency
+}
+
 /**
  * @brief Prefill the swizzled offsets for the given register tile and shared tile.
  * This function makes a number of assumptions which are true for FP8_4wave gemm, but
