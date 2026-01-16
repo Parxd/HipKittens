@@ -96,7 +96,7 @@ __device__ inline static void load_one(ST& dst, const GL& src, precomputed_addre
 }
 
 template<typename ST, typename GL>
-__device__ inline static void load_one_scale(ST& dst, const GL& src, const coord<GL>& idx) {
+__device__ inline static void load_one_scale(fp8e8m0* dst, const GL& src, const coord<GL>& idx) {
     constexpr int axis = 2;
 
     const int N_THREADS = kittens::num_warps()*kittens::WARP_THREADS; // 64*4 = 256
@@ -120,7 +120,7 @@ __device__ inline static void load_one_scale(ST& dst, const GL& src, const coord
 
     const uint32_t global_byte_offset = (row * row_stride + col) * sizeof(T);
 
-    uintptr_t lds_addr = reinterpret_cast<uintptr_t>(&dst.data[0]) + (warpid * bytes_per_warp);
+    uintptr_t lds_addr = reinterpret_cast<uintptr_t>(dst) + (warpid * bytes_per_warp);
     as3_uint32_ptr lds_ptr = (as3_uint32_ptr)(lds_addr);
 
     coord<> unit_coord = idx.template unit_coord<axis, 3>();
