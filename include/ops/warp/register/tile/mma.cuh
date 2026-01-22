@@ -124,6 +124,7 @@ __device__ static inline void mfma1616128(      float2 (&D)[2],
     )};
 }
 
+template<int opsel_a, int opsel_b>
 __device__ static inline void mfma1616128_scaled(      float2 (&D)[2],
                                          const fp8e4m3_4 (&A)[8],
                                          const fp8e4m3_4 (&B)[8],
@@ -139,10 +140,10 @@ __device__ static inline void mfma1616128_scaled(      float2 (&D)[2],
         *(floatx4_t*)C,
         0,                      // cbsz
         0,                      // blgp
-        0,                      // OPSEL_A (pull least significant 8 bits of scale_a)
-        *(int32_t*)scale_a,     // scale_a: FP8 E8M0
-        0,                      // OPSEL_B (pull least significant 8 bits of scale_b)
-        *(int32_t*)scale_b      // scale_b: FP8 E8M0
+        opsel_a,                      // OPSEL_A
+        *scale_a,     // scale_a: FP8 E8M0
+        opsel_b,                      // OPSEL_B
+        *scale_b      // scale_b: FP8 E8M0
     )};
 }
 
@@ -253,7 +254,7 @@ __device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col,
  * @param[in] b The second input rt_base<Operand_T, row_layout> matrix.
  * @param[in] c The input rt_base<float, col_layout> accumulator matrix.
  */
-template<ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape, ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape, typename MM_Operand_T=bf16>
+template<int opsel_a, int opsel_b, ducks::rt_shape::all D_shape, ducks::rt_shape::all A_shape, ducks::rt_shape::all B_shape, ducks::rt_shape::all C_shape, typename MM_Operand_T>
 __device__ static inline void mma_ABt_base_scaled(rt_base<float, ducks::rt_layout::col, D_shape> &d,
     const rt_base<MM_Operand_T, ducks::rt_layout::row, A_shape> &a,
     const rt_base<MM_Operand_T, ducks::rt_layout::row, B_shape> &b, // in row-major mode
@@ -276,7 +277,7 @@ __device__ static inline void mma_ABt_base_scaled(rt_base<float, ducks::rt_layou
                 A_rows == 16 && A_cols == 128 &&
                 B_rows == 16 && B_cols == 128 &&
                 std::is_same_v<C_shape, typename ducks::rt_shape::rt_16x16>) {
-        mfma1616128_scaled(d.data, a.data, b.data, c.data, scale_a, scale_b);
+        mfma1616128_scaled<opsel_a, opsel_b>(d.data, a.data, b.data, c.data, scale_a, scale_b);
     } else {
         static_assert(false, "Unsupported shape combination");
     }

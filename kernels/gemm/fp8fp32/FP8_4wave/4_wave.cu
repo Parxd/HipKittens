@@ -2,6 +2,7 @@
 #include <random>
 #include <omp.h>
 #include <chrono>
+#include <math.h>
 
 using namespace kittens;
 
@@ -15,15 +16,15 @@ constexpr int NUM_WARPS = 4;
 using G = kittens::group<NUM_WARPS>;
 
 template<typename ST_GL, typename GL_GL, typename ST, typename RT, typename RT_A, typename RT_B, typename RT_C, ducks::coord::tile COORD=coord<ST_GL>>
-__device__ inline static void do_interleaved_cluster(ST_GL& dst_gl, const GL_GL& src_gl, COORD idx, RT& dst, const ST& src, RT_A& a, RT_B& b, RT_C& c) {
+__device__ inline static void do_interleaved_cluster(ST_GL& dst_gl, const GL_GL& src_gl, COORD idx, RT& dst, const ST& src, RT_A& a, RT_B& b, RT_C& c, const fp8e8m0_4* scale_a, const fp8e8m0_4* scale_b) {
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 0, 0, 0);
+    mma_ABt_one<0, 0>(c, a, b, c, 0, 0, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
     
     precomputed_addresses addresses = precompute_addresses(dst_gl, src_gl, idx);
 
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 0, 1, 0);
+    mma_ABt_one<0, 1>(c, a, b, c, 0, 1, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
 
     uint32_t swizzled_offsets[2];
@@ -33,57 +34,57 @@ __device__ inline static void do_interleaved_cluster(ST_GL& dst_gl, const GL_GL&
     load_one<0, 0, 0>(dst, src, swizzled_offsets);
 
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 0, 2, 0);
+    mma_ABt_one<0, 2>(c, a, b, c, 0, 2, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
 
     load_one<0, 0, 1>(dst, src, swizzled_offsets);
 
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 0, 3, 0);
+    mma_ABt_one<0, 3>(c, a, b, c, 0, 3, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
 
     load_one<1>(dst_gl, src_gl, addresses);
     load_one<1, 0, 0>(dst, src, swizzled_offsets);
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 1, 0, 0);
-    mma_ABt_one(c, a, b, c, 1, 1, 0);
+    mma_ABt_one<1, 0>(c, a, b, c, 1, 0, 0, scale_a, scale_b);
+    mma_ABt_one<1, 1>(c, a, b, c, 1, 1, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
 
     load_one<1, 0, 1>(dst, src, swizzled_offsets);
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 1, 2, 0);
-    mma_ABt_one(c, a, b, c, 1, 3, 0);
+    mma_ABt_one<1, 2>(c, a, b, c, 1, 2, 0, scale_a, scale_b);
+    mma_ABt_one<1, 3>(c, a, b, c, 1, 3, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
 
     load_one<2>(dst_gl, src_gl, addresses);
     load_one<2, 0, 0>(dst, src, swizzled_offsets);
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 2, 0, 0);
-    mma_ABt_one(c, a, b, c, 2, 1, 0);
+    mma_ABt_one<2, 0>(c, a, b, c, 2, 0, 0, scale_a, scale_b);
+    mma_ABt_one<2, 1>(c, a, b, c, 2, 1, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
 
     load_one<2, 0, 1>(dst, src, swizzled_offsets);
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 2, 2, 0);
-    mma_ABt_one(c, a, b, c, 2, 3, 0);
+    mma_ABt_one<2, 2>(c, a, b, c, 2, 2, 0, scale_a, scale_b);
+    mma_ABt_one<2, 3>(c, a, b, c, 2, 3, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
 
     load_one<3>(dst_gl, src_gl, addresses);
     load_one<3, 0, 0>(dst, src, swizzled_offsets);
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 3, 0, 0);
-    mma_ABt_one(c, a, b, c, 3, 1, 0);
+    mma_ABt_one<3, 0>(c, a, b, c, 3, 0, 0, scale_a, scale_b);
+    mma_ABt_one<3, 1>(c, a, b, c, 3, 1, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
 
     load_one<3, 0, 1>(dst, src, swizzled_offsets);
     __builtin_amdgcn_sched_barrier(0);
-    mma_ABt_one(c, a, b, c, 3, 2, 0);
-    mma_ABt_one(c, a, b, c, 3, 3, 0);
+    mma_ABt_one<3, 2>(c, a, b, c, 3, 2, 0, scale_a, scale_b);
+    mma_ABt_one<3, 3>(c, a, b, c, 3, 3, 0, scale_a, scale_b);
     __builtin_amdgcn_sched_barrier(0);
 }
 
 template <int M, int N, int K>
-__global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m3, 1, 1, M, K> A, const kittens::gl<fp8e4m3, 1, 1, N, K> B, const kittens::gl<bf16, 1, 1, M, N> C) {
+__global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m3, 1, 1, M, K> A, const kittens::gl<fp8e4m3, 1, 1, N, K> B, const kittens::gl<bf16, 1, 1, M, N> C, const fp8e8m0_4* d_scale_a, const fp8e8m0_4* d_scale_b) {
     constexpr int WARPS_COL = 2;
     constexpr int WARPS_ROW = 2;
     constexpr int BLOCK_SIZE_ROW = 256;
@@ -191,15 +192,25 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
+        fp8e8m0_4* scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + k * (BLOCK_SIZE_ROW * BLOCK_K / 32) (BLOCK_SIZE_ROW / 2) * 0 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        fp8e8m0_4* scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 0 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
         auto bs_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, k_step>(Bs[curr][1], {warp_n, 0});
-        do_interleaved_cluster(As[curr][0], A, {0, 0, block_row*WARPS_ROW, k + 2}, b[1], bs_subtile_1, a[0], b[0], c[0][0]);
+        do_interleaved_cluster(As[curr][0], A, {0, 0, block_row*WARPS_ROW, k + 2}, b[1], bs_subtile_1, a[0], b[0], c[0][0], scale_a, scale_b);
 
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
 
+        scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 0 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 1 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
         auto a_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_ROW / 2 / WARPS_ROW, k_step>(As[curr][1], {warp_m, 0});
-        do_interleaved_cluster(Bs[curr][0], B, {0, 0, block_col*WARPS_COL, k + 2}, a[1], a_subtile_1, a[0], b[1], c[0][1]);
+        do_interleaved_cluster(Bs[curr][0], B, {0, 0, block_col*WARPS_COL, k + 2}, a[1], a_subtile_1, a[0], b[1], c[0][1], scale_a, scale_b);
 
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt vmcnt(16)");
@@ -207,14 +218,25 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
 
+        scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 1 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 0 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
         auto a_subtile_0 = kittens::subtile_inplace<BLOCK_SIZE_ROW / 2 / WARPS_ROW, k_step>(As[next][0], {warp_m, 0});
-        do_interleaved_cluster(Bs[curr][1], B, {0, 0, block_col*WARPS_COL+1, k + 2}, a[0], a_subtile_0, a[1], b[0], c[1][0]);
+        do_interleaved_cluster(Bs[curr][1], B, {0, 0, block_col*WARPS_COL+1, k + 2}, a[0], a_subtile_0, a[1], b[0], c[1][0], scale_a, scale_b);
+
+        scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 1 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 1 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
 
         auto b_subtile_0 = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, k_step>(Bs[next][0], {warp_n, 0});
-        do_interleaved_cluster(As[curr][1], A, {0, 0, block_row*WARPS_ROW+1, k + 2}, b[0], b_subtile_0, a[1], b[1], c[1][1]);
+        do_interleaved_cluster(As[curr][1], A, {0, 0, block_row*WARPS_ROW+1, k + 2}, b[0], b_subtile_0, a[1], b[1], c[1][1], scale_a, scale_b);
     }
 
     { // EPILOGUE: k = k_iters - 2
+        int k = k_iters - 2;
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt vmcnt(16)");
         __builtin_amdgcn_s_barrier();
@@ -227,8 +249,28 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         auto b_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, k_step>(Bs[curr][1], {warp_n, 0});
         load(b[1], b_subtile_1);
 
+        fp8e8m0_4* scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 0 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        fp8e8m0_4* scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 0 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
         __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[0][0], a[0], b[0], c[0][0]);
+        mma_ABt_one<0, 0>(c[0][0], a[0], b[0], c[0][0], 0, 0, 0, scale_a, scale_b);
+        mma_ABt_one<0, 1>(c[0][0], a[0], b[0], c[0][0], 0, 1, 0, scale_a, scale_b);
+        mma_ABt_one<0, 2>(c[0][0], a[0], b[0], c[0][0], 0, 2, 0, scale_a, scale_b);
+        mma_ABt_one<0, 3>(c[0][0], a[0], b[0], c[0][0], 0, 3, 0, scale_a, scale_b);
+        mma_ABt_one<1, 0>(c[0][0], a[0], b[0], c[0][0], 1, 0, 0, scale_a, scale_b);
+        mma_ABt_one<1, 1>(c[0][0], a[0], b[0], c[0][0], 1, 1, 0, scale_a, scale_b);
+        mma_ABt_one<1, 2>(c[0][0], a[0], b[0], c[0][0], 1, 2, 0, scale_a, scale_b);
+        mma_ABt_one<1, 3>(c[0][0], a[0], b[0], c[0][0], 1, 3, 0, scale_a, scale_b);
+        mma_ABt_one<2, 0>(c[0][0], a[0], b[0], c[0][0], 2, 0, 0, scale_a, scale_b);
+        mma_ABt_one<2, 1>(c[0][0], a[0], b[0], c[0][0], 2, 1, 0, scale_a, scale_b);
+        mma_ABt_one<2, 2>(c[0][0], a[0], b[0], c[0][0], 2, 2, 0, scale_a, scale_b);
+        mma_ABt_one<2, 3>(c[0][0], a[0], b[0], c[0][0], 2, 3, 0, scale_a, scale_b);
+        mma_ABt_one<3, 0>(c[0][0], a[0], b[0], c[0][0], 3, 0, 0, scale_a, scale_b);
+        mma_ABt_one<3, 1>(c[0][0], a[0], b[0], c[0][0], 3, 1, 0, scale_a, scale_b);
+        mma_ABt_one<3, 2>(c[0][0], a[0], b[0], c[0][0], 3, 2, 0, scale_a, scale_b);
+        mma_ABt_one<3, 3>(c[0][0], a[0], b[0], c[0][0], 3, 3, 0, scale_a, scale_b);
         __builtin_amdgcn_sched_barrier(0);
 
         __builtin_amdgcn_sched_barrier(0);
@@ -238,8 +280,28 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         auto a_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_ROW / 2 / WARPS_ROW, k_step>(As[curr][1], {warp_m, 0});
         load(a[1], a_subtile_1);
 
+        scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 0 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 1 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
         __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[0][1], a[0], b[1], c[0][1]);
+        mma_ABt_one<0, 0>(c[0][1], a[0], b[1], c[0][1], 0, 0, 0, scale_a, scale_b);
+        mma_ABt_one<0, 1>(c[0][1], a[0], b[1], c[0][1], 0, 1, 0, scale_a, scale_b);
+        mma_ABt_one<0, 2>(c[0][1], a[0], b[1], c[0][1], 0, 2, 0, scale_a, scale_b);
+        mma_ABt_one<0, 3>(c[0][1], a[0], b[1], c[0][1], 0, 3, 0, scale_a, scale_b);
+        mma_ABt_one<1, 0>(c[0][1], a[0], b[1], c[0][1], 1, 0, 0, scale_a, scale_b);
+        mma_ABt_one<1, 1>(c[0][1], a[0], b[1], c[0][1], 1, 1, 0, scale_a, scale_b);
+        mma_ABt_one<1, 2>(c[0][1], a[0], b[1], c[0][1], 1, 2, 0, scale_a, scale_b);
+        mma_ABt_one<1, 3>(c[0][1], a[0], b[1], c[0][1], 1, 3, 0, scale_a, scale_b);
+        mma_ABt_one<2, 0>(c[0][1], a[0], b[1], c[0][1], 2, 0, 0, scale_a, scale_b);
+        mma_ABt_one<2, 1>(c[0][1], a[0], b[1], c[0][1], 2, 1, 0, scale_a, scale_b);
+        mma_ABt_one<2, 2>(c[0][1], a[0], b[1], c[0][1], 2, 2, 0, scale_a, scale_b);
+        mma_ABt_one<2, 3>(c[0][1], a[0], b[1], c[0][1], 2, 3, 0, scale_a, scale_b);
+        mma_ABt_one<3, 0>(c[0][1], a[0], b[1], c[0][1], 3, 0, 0, scale_a, scale_b);
+        mma_ABt_one<3, 1>(c[0][1], a[0], b[1], c[0][1], 3, 1, 0, scale_a, scale_b);
+        mma_ABt_one<3, 2>(c[0][1], a[0], b[1], c[0][1], 3, 2, 0, scale_a, scale_b);
+        mma_ABt_one<3, 3>(c[0][1], a[0], b[1], c[0][1], 3, 3, 0, scale_a, scale_b);
         __builtin_amdgcn_sched_barrier(0);
 
         __builtin_amdgcn_sched_barrier(0);
@@ -254,15 +316,55 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         auto a_subtile_0 = kittens::subtile_inplace<BLOCK_SIZE_ROW / 2 / WARPS_ROW, k_step>(As[next][0], {warp_m, 0});
         load(a[0], a_subtile_0);
 
+        scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 1 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 0 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
         __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[1][0], a[1], b[0], c[1][0]);
+        mma_ABt_one<0, 0>(c[1][0], a[1], b[0], c[1][0], 0, 0, 0, scale_a, scale_b);
+        mma_ABt_one<0, 1>(c[1][0], a[1], b[0], c[1][0], 0, 1, 0, scale_a, scale_b);
+        mma_ABt_one<0, 2>(c[1][0], a[1], b[0], c[1][0], 0, 2, 0, scale_a, scale_b);
+        mma_ABt_one<0, 3>(c[1][0], a[1], b[0], c[1][0], 0, 3, 0, scale_a, scale_b);
+        mma_ABt_one<1, 0>(c[1][0], a[1], b[0], c[1][0], 1, 0, 0, scale_a, scale_b);
+        mma_ABt_one<1, 1>(c[1][0], a[1], b[0], c[1][0], 1, 1, 0, scale_a, scale_b);
+        mma_ABt_one<1, 2>(c[1][0], a[1], b[0], c[1][0], 1, 2, 0, scale_a, scale_b);
+        mma_ABt_one<1, 3>(c[1][0], a[1], b[0], c[1][0], 1, 3, 0, scale_a, scale_b);
+        mma_ABt_one<2, 0>(c[1][0], a[1], b[0], c[1][0], 2, 0, 0, scale_a, scale_b);
+        mma_ABt_one<2, 1>(c[1][0], a[1], b[0], c[1][0], 2, 1, 0, scale_a, scale_b);
+        mma_ABt_one<2, 2>(c[1][0], a[1], b[0], c[1][0], 2, 2, 0, scale_a, scale_b);
+        mma_ABt_one<2, 3>(c[1][0], a[1], b[0], c[1][0], 2, 3, 0, scale_a, scale_b);
+        mma_ABt_one<3, 0>(c[1][0], a[1], b[0], c[1][0], 3, 0, 0, scale_a, scale_b);
+        mma_ABt_one<3, 1>(c[1][0], a[1], b[0], c[1][0], 3, 1, 0, scale_a, scale_b);
+        mma_ABt_one<3, 2>(c[1][0], a[1], b[0], c[1][0], 3, 2, 0, scale_a, scale_b);
+        mma_ABt_one<3, 3>(c[1][0], a[1], b[0], c[1][0], 3, 3, 0, scale_a, scale_b);
         __builtin_amdgcn_sched_barrier(0);
 
         auto b_subtile_0 = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, k_step>(Bs[next][0], {warp_n, 0});
         load(b[0], b_subtile_0);
 
+        scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 1 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 1 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
         __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[1][1], a[1], b[1], c[1][1]);
+        mma_ABt_one<0, 0>(c[1][1], a[1], b[1], c[1][1], 0, 0, 0, scale_a, scale_b);
+        mma_ABt_one<0, 1>(c[1][1], a[1], b[1], c[1][1], 0, 1, 0, scale_a, scale_b);
+        mma_ABt_one<0, 2>(c[1][1], a[1], b[1], c[1][1], 0, 2, 0, scale_a, scale_b);
+        mma_ABt_one<0, 3>(c[1][1], a[1], b[1], c[1][1], 0, 3, 0, scale_a, scale_b);
+        mma_ABt_one<1, 0>(c[1][1], a[1], b[1], c[1][1], 1, 0, 0, scale_a, scale_b);
+        mma_ABt_one<1, 1>(c[1][1], a[1], b[1], c[1][1], 1, 1, 0, scale_a, scale_b);
+        mma_ABt_one<1, 2>(c[1][1], a[1], b[1], c[1][1], 1, 2, 0, scale_a, scale_b);
+        mma_ABt_one<1, 3>(c[1][1], a[1], b[1], c[1][1], 1, 3, 0, scale_a, scale_b);
+        mma_ABt_one<2, 0>(c[1][1], a[1], b[1], c[1][1], 2, 0, 0, scale_a, scale_b);
+        mma_ABt_one<2, 1>(c[1][1], a[1], b[1], c[1][1], 2, 1, 0, scale_a, scale_b);
+        mma_ABt_one<2, 2>(c[1][1], a[1], b[1], c[1][1], 2, 2, 0, scale_a, scale_b);
+        mma_ABt_one<2, 3>(c[1][1], a[1], b[1], c[1][1], 2, 3, 0, scale_a, scale_b);
+        mma_ABt_one<3, 0>(c[1][1], a[1], b[1], c[1][1], 3, 0, 0, scale_a, scale_b);
+        mma_ABt_one<3, 1>(c[1][1], a[1], b[1], c[1][1], 3, 1, 0, scale_a, scale_b);
+        mma_ABt_one<3, 2>(c[1][1], a[1], b[1], c[1][1], 3, 2, 0, scale_a, scale_b);
+        mma_ABt_one<3, 3>(c[1][1], a[1], b[1], c[1][1], 3, 3, 0, scale_a, scale_b);
         __builtin_amdgcn_sched_barrier(0);
 
         curr ^= 1;
@@ -270,6 +372,7 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
     }
 
     { // EPILOGUE: k = k_iters - 1
+        int k = k_iters - 1;
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt vmcnt(0)");
         __builtin_amdgcn_s_barrier();
@@ -282,8 +385,28 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         auto b_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_COL / 2 / WARPS_COL, k_step>(Bs[curr][1], {warp_n, 0});
         load(b[1], b_subtile_1);
 
+        fp8e8m0_4* scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 0 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        fp8e8m0_4* scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 0 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
         __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[0][0], a[0], b[0], c[0][0]);
+        mma_ABt_one<0, 0>(c[0][0], a[0], b[0], c[0][0], 0, 0, 0, scale_a, scale_b);
+        mma_ABt_one<0, 1>(c[0][0], a[0], b[0], c[0][0], 0, 1, 0, scale_a, scale_b);
+        mma_ABt_one<0, 2>(c[0][0], a[0], b[0], c[0][0], 0, 2, 0, scale_a, scale_b);
+        mma_ABt_one<0, 3>(c[0][0], a[0], b[0], c[0][0], 0, 3, 0, scale_a, scale_b);
+        mma_ABt_one<1, 0>(c[0][0], a[0], b[0], c[0][0], 1, 0, 0, scale_a, scale_b);
+        mma_ABt_one<1, 1>(c[0][0], a[0], b[0], c[0][0], 1, 1, 0, scale_a, scale_b);
+        mma_ABt_one<1, 2>(c[0][0], a[0], b[0], c[0][0], 1, 2, 0, scale_a, scale_b);
+        mma_ABt_one<1, 3>(c[0][0], a[0], b[0], c[0][0], 1, 3, 0, scale_a, scale_b);
+        mma_ABt_one<2, 0>(c[0][0], a[0], b[0], c[0][0], 2, 0, 0, scale_a, scale_b);
+        mma_ABt_one<2, 1>(c[0][0], a[0], b[0], c[0][0], 2, 1, 0, scale_a, scale_b);
+        mma_ABt_one<2, 2>(c[0][0], a[0], b[0], c[0][0], 2, 2, 0, scale_a, scale_b);
+        mma_ABt_one<2, 3>(c[0][0], a[0], b[0], c[0][0], 2, 3, 0, scale_a, scale_b);
+        mma_ABt_one<3, 0>(c[0][0], a[0], b[0], c[0][0], 3, 0, 0, scale_a, scale_b);
+        mma_ABt_one<3, 1>(c[0][0], a[0], b[0], c[0][0], 3, 1, 0, scale_a, scale_b);
+        mma_ABt_one<3, 2>(c[0][0], a[0], b[0], c[0][0], 3, 2, 0, scale_a, scale_b);
+        mma_ABt_one<3, 3>(c[0][0], a[0], b[0], c[0][0], 3, 3, 0, scale_a, scale_b);
         __builtin_amdgcn_sched_barrier(0);
 
         __builtin_amdgcn_sched_barrier(0);
@@ -293,20 +416,80 @@ __global__ __launch_bounds__(256, 1) void matmul_device(const kittens::gl<fp8e4m
         auto a_subtile_1 = kittens::subtile_inplace<BLOCK_SIZE_ROW / 2 / WARPS_ROW, k_step>(As[curr][1], {warp_m, 0});
         load(a[1], a_subtile_1);
 
+        scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 0 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 1 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
         __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[0][1], a[0], b[1], c[0][1]);
+        mma_ABt_one<0, 0>(c[0][1], a[0], b[1], c[0][1], 0, 0, 0, scale_a, scale_b);
+        mma_ABt_one<0, 1>(c[0][1], a[0], b[1], c[0][1], 0, 1, 0, scale_a, scale_b);
+        mma_ABt_one<0, 2>(c[0][1], a[0], b[1], c[0][1], 0, 2, 0, scale_a, scale_b);
+        mma_ABt_one<0, 3>(c[0][1], a[0], b[1], c[0][1], 0, 3, 0, scale_a, scale_b);
+        mma_ABt_one<1, 0>(c[0][1], a[0], b[1], c[0][1], 1, 0, 0, scale_a, scale_b);
+        mma_ABt_one<1, 1>(c[0][1], a[0], b[1], c[0][1], 1, 1, 0, scale_a, scale_b);
+        mma_ABt_one<1, 2>(c[0][1], a[0], b[1], c[0][1], 1, 2, 0, scale_a, scale_b);
+        mma_ABt_one<1, 3>(c[0][1], a[0], b[1], c[0][1], 1, 3, 0, scale_a, scale_b);
+        mma_ABt_one<2, 0>(c[0][1], a[0], b[1], c[0][1], 2, 0, 0, scale_a, scale_b);
+        mma_ABt_one<2, 1>(c[0][1], a[0], b[1], c[0][1], 2, 1, 0, scale_a, scale_b);
+        mma_ABt_one<2, 2>(c[0][1], a[0], b[1], c[0][1], 2, 2, 0, scale_a, scale_b);
+        mma_ABt_one<2, 3>(c[0][1], a[0], b[1], c[0][1], 2, 3, 0, scale_a, scale_b);
+        mma_ABt_one<3, 0>(c[0][1], a[0], b[1], c[0][1], 3, 0, 0, scale_a, scale_b);
+        mma_ABt_one<3, 1>(c[0][1], a[0], b[1], c[0][1], 3, 1, 0, scale_a, scale_b);
+        mma_ABt_one<3, 2>(c[0][1], a[0], b[1], c[0][1], 3, 2, 0, scale_a, scale_b);
+        mma_ABt_one<3, 3>(c[0][1], a[0], b[1], c[0][1], 3, 3, 0, scale_a, scale_b);
         __builtin_amdgcn_sched_barrier(0);
 
         __builtin_amdgcn_sched_barrier(0);
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_sched_barrier(0);
 
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[1][0], a[1], b[0], c[1][0]);
-        __builtin_amdgcn_sched_barrier(0);
+        scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 1 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 0 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
 
         __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(c[1][1], a[1], b[1], c[1][1]);
+        mma_ABt_one<0, 0>(c[1][0], a[1], b[0], c[1][0], 0, 0, 0, scale_a, scale_b);
+        mma_ABt_one<0, 1>(c[1][0], a[1], b[0], c[1][0], 0, 1, 0, scale_a, scale_b);
+        mma_ABt_one<0, 2>(c[1][0], a[1], b[0], c[1][0], 0, 2, 0, scale_a, scale_b);
+        mma_ABt_one<0, 3>(c[1][0], a[1], b[0], c[1][0], 0, 3, 0, scale_a, scale_b);
+        mma_ABt_one<1, 0>(c[1][0], a[1], b[0], c[1][0], 1, 0, 0, scale_a, scale_b);
+        mma_ABt_one<1, 1>(c[1][0], a[1], b[0], c[1][0], 1, 1, 0, scale_a, scale_b);
+        mma_ABt_one<1, 2>(c[1][0], a[1], b[0], c[1][0], 1, 2, 0, scale_a, scale_b);
+        mma_ABt_one<1, 3>(c[1][0], a[1], b[0], c[1][0], 1, 3, 0, scale_a, scale_b);
+        mma_ABt_one<2, 0>(c[1][0], a[1], b[0], c[1][0], 2, 0, 0, scale_a, scale_b);
+        mma_ABt_one<2, 1>(c[1][0], a[1], b[0], c[1][0], 2, 1, 0, scale_a, scale_b);
+        mma_ABt_one<2, 2>(c[1][0], a[1], b[0], c[1][0], 2, 2, 0, scale_a, scale_b);
+        mma_ABt_one<2, 3>(c[1][0], a[1], b[0], c[1][0], 2, 3, 0, scale_a, scale_b);
+        mma_ABt_one<3, 0>(c[1][0], a[1], b[0], c[1][0], 3, 0, 0, scale_a, scale_b);
+        mma_ABt_one<3, 1>(c[1][0], a[1], b[0], c[1][0], 3, 1, 0, scale_a, scale_b);
+        mma_ABt_one<3, 2>(c[1][0], a[1], b[0], c[1][0], 3, 2, 0, scale_a, scale_b);
+        mma_ABt_one<3, 3>(c[1][0], a[1], b[0], c[1][0], 3, 3, 0, scale_a, scale_b);
+        __builtin_amdgcn_sched_barrier(0);
+
+        scale_a = (fp8e8m0_4*) (&d_scale_a[(block_m + (BLOCK_SIZE_ROW / 2) * 1 + warp_m * (BLOCK_SIZE_ROW / 2 / WARPS_ROW)) * (K / 32) + k * (BLOCK_SIZE_ROW / 2 / WARPS_ROW) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        scale_b = (fp8e8m0_4*) (&d_scale_b[(block_n + (BLOCK_SIZE_COL / 2) * 1 + warp_n * (BLOCK_SIZE_COL / 2 / WARPS_COL)) * (K / 32) + k * (BLOCK_SIZE_COL / 2 / WARPS_COL) * (BLOCK_K / 32) + laneid() * (BLOCK_K / 32)]);
+        __builtin_amdgcn_s_waitcnt(0);
+        __builtin_amdgcn_s_barrier();
+
+        __builtin_amdgcn_sched_barrier(0);
+        mma_ABt_one<0, 0>(c[1][1], a[1], b[1], c[1][1], 0, 0, 0, scale_a, scale_b);
+        mma_ABt_one<0, 1>(c[1][1], a[1], b[1], c[1][1], 0, 1, 0, scale_a, scale_b);
+        mma_ABt_one<0, 2>(c[1][1], a[1], b[1], c[1][1], 0, 2, 0, scale_a, scale_b);
+        mma_ABt_one<0, 3>(c[1][1], a[1], b[1], c[1][1], 0, 3, 0, scale_a, scale_b);
+        mma_ABt_one<1, 0>(c[1][1], a[1], b[1], c[1][1], 1, 0, 0, scale_a, scale_b);
+        mma_ABt_one<1, 1>(c[1][1], a[1], b[1], c[1][1], 1, 1, 0, scale_a, scale_b);
+        mma_ABt_one<1, 2>(c[1][1], a[1], b[1], c[1][1], 1, 2, 0, scale_a, scale_b);
+        mma_ABt_one<1, 3>(c[1][1], a[1], b[1], c[1][1], 1, 3, 0, scale_a, scale_b);
+        mma_ABt_one<2, 0>(c[1][1], a[1], b[1], c[1][1], 2, 0, 0, scale_a, scale_b);
+        mma_ABt_one<2, 1>(c[1][1], a[1], b[1], c[1][1], 2, 1, 0, scale_a, scale_b);
+        mma_ABt_one<2, 2>(c[1][1], a[1], b[1], c[1][1], 2, 2, 0, scale_a, scale_b);
+        mma_ABt_one<2, 3>(c[1][1], a[1], b[1], c[1][1], 2, 3, 0, scale_a, scale_b);
+        mma_ABt_one<3, 0>(c[1][1], a[1], b[1], c[1][1], 3, 0, 0, scale_a, scale_b);
+        mma_ABt_one<3, 1>(c[1][1], a[1], b[1], c[1][1], 3, 1, 0, scale_a, scale_b);
+        mma_ABt_one<3, 2>(c[1][1], a[1], b[1], c[1][1], 3, 2, 0, scale_a, scale_b);
+        mma_ABt_one<3, 3>(c[1][1], a[1], b[1], c[1][1], 3, 3, 0, scale_a, scale_b);
         __builtin_amdgcn_sched_barrier(0);
     }
     __builtin_amdgcn_sched_barrier(0);
@@ -892,6 +1075,26 @@ TimingResult matmul_host(std::vector<fp8e4m3>& a, std::vector<fp8e4m3>& b, std::
     }
     HipCheckError();
     printf("Buffer initialization complete.\n");
+
+    fp8e8m0_4* d_scale_a;
+    fp8e8m0_4* d_scale_b;
+    hipMalloc(&d_scale_a, block_count * M*(K/32));
+    hipMalloc(&d_scale_b, block_count * N*(K/32));
+    HipCheckError();
+
+    std::vector<fp8e8m0_4> scale_a(block_count * M*(K/32)/sizeof(fp8e8m0_4));
+    std::vector<fp8e8m0_4> scale_b(block_count * N*(K/32)/sizeof(fp8e8m0_4));
+    for (int block = 0; block < block_count; ++block) {
+        for (int i = 0; i < M*(K/32)/sizeof(fp8e8m0_4); ++i) {
+            scale_a[block * M*(K/32)/sizeof(fp8e8m0_4) + i] = 0x7F7F7F7F;
+        }
+        for (int i = 0; i < N*(K/32)/sizeof(fp8e8m0_4); ++i) {
+            scale_b[block * N*(K/32)/sizeof(fp8e8m0_4) + i] = 0x7F7F7F7F;
+        }
+    }
+    hipMemcpy(d_scale_a, scale_a.data(), block_count * M*(K/32), hipMemcpyHostToDevice);
+    hipMemcpy(d_scale_b, scale_b.data(), block_count * N*(K/32), hipMemcpyHostToDevice);
+    HipCheckError();
     
     // Warmup iterations using rotating buffers (A and B only)
     for (int i = 0; i < warmup_iters; i++) {
@@ -910,7 +1113,7 @@ TimingResult matmul_host(std::vector<fp8e4m3>& a, std::vector<fp8e4m3>& b, std::
         } else if constexpr (M == 2048 && N == 2048 && K == 2048) {
             matmul_device_2048<M, N, K><<<threadblocks, threads_per_block>>>(A, B, C);
         } else {
-            matmul_device<M, N, K><<<threadblocks, threads_per_block>>>(A, B, C);
+            matmul_device<M, N, K><<<threadblocks, threads_per_block>>>(A, B, C, d_scale_a, d_scale_b);
         }
         HipCheckError();
         hipDeviceSynchronize();
@@ -950,7 +1153,7 @@ TimingResult matmul_host(std::vector<fp8e4m3>& a, std::vector<fp8e4m3>& b, std::
             hipEventSynchronize(stop_event);
         } else {
             hipEventRecord(start_event, 0);
-            matmul_device<M, N, K><<<threadblocks, threads_per_block>>>(A_current, B_current, C_current);
+            matmul_device<M, N, K><<<threadblocks, threads_per_block>>>(A_current, B_current, C_current, d_scale_a, d_scale_b);
             hipEventRecord(stop_event, 0);
             hipEventSynchronize(stop_event);
         }
@@ -1060,6 +1263,7 @@ int main() {
 
     bool success = true;
     // Compare GPU result (c_host) with CPU reference (c_ref)
+    float max_diff = 0.0f;
     for (int row = 0; row < M; ++row) {
         for (int col = 0; col < N; ++col) {
             // c_host is row major: [row*N + col]
@@ -1071,6 +1275,7 @@ int main() {
             if (diff > threshold) {
                 printf("Mismatch at (row=%d, col=%d): c_host = %f, c_ref = %f, diff = %f\n", row, col, c_val, c_ref_val, diff);
                 success = false;
+                max_diff = std::max(max_diff, diff);
                 break;
             }
         }
@@ -1078,6 +1283,37 @@ int main() {
             break;
         }
     }
+
+    constexpr int print_size = 8;
+    printf("Host values:\n");
+    for (int row = 0; row < print_size; ++row) {
+        for (int col = 0; col < print_size; ++col) {
+            printf("%f,", float(c_host[row * N + col]));
+            if (col == print_size - 1) {
+                printf("\n");
+            }
+        }
+    }
+    printf("\n\n");
+    printf("Effective scale values:\n");
+    for (int row = 0; row < print_size; ++row) {
+        for (int col = 0; col < print_size; ++col) {
+            printf("%f,", sqrt(float(c_host[row * N + col]) / float(c_ref[row * N + col])));
+            if (col == print_size - 1) {
+                printf("\n");
+            }
+        }
+    }
+    printf("\n\nReference values:\n");
+    for (int row = 0; row < print_size; ++row) {
+        for (int col = 0; col < print_size; ++col) {
+            printf("%f,", float(c_ref[row * N + col]));
+            if (col == print_size - 1) {
+                printf("\n");
+            }
+        }
+    }
+    printf("Max diff: %f\n", max_diff);
     // Performance comparison and results
     printf("\n=== PERFORMANCE RESULTS ===\n");
     

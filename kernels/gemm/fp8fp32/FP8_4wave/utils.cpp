@@ -95,8 +95,8 @@ __device__ inline static void load_one(ST& dst, const GL& src, precomputed_addre
         static_cast<int>(coherency::cache_all)); // cache coherency
 }
 
-template<typename ST, typename GL>
-__device__ inline static void load_one_scale(fp8e8m0* dst, const GL& src, const coord<GL>& idx) {
+template<typename GL>
+__device__ inline static void load_one_scale(fp8e8m0_4* dst, const fp8e8m0_4* src) {
     constexpr int axis = 2;
 
     const int N_THREADS = kittens::num_warps()*kittens::WARP_THREADS; // 64*4 = 256
@@ -105,7 +105,6 @@ __device__ inline static void load_one_scale(fp8e8m0* dst, const GL& src, const 
 
     constexpr int bytes_per_thread = ST::underlying_subtile_bytes_per_thread; // 4*256/256 = 4
     constexpr int bytes_per_warp = bytes_per_thread * kittens::WARP_THREADS; // 4*64 = 256
-    static_assert(ST::rows * ST::cols * sizeof(T) >= bytes_per_warp, "shared tile must be at least 1024 bytes");
 
     const int num_warps = N_THREADS / kittens::WARP_THREADS;
     const int laneid = kittens::laneid();
@@ -123,9 +122,8 @@ __device__ inline static void load_one_scale(fp8e8m0* dst, const GL& src, const 
     uintptr_t lds_addr = reinterpret_cast<uintptr_t>(dst) + (warpid * bytes_per_warp);
     as3_uint32_ptr lds_ptr = (as3_uint32_ptr)(lds_addr);
 
-    coord<> unit_coord = idx.template unit_coord<axis, 3>();
-    T* global_ptr = (T*)&src[unit_coord];
-    i32x4 srsrc = make_srsrc(global_ptr, row_stride * ST::rows * sizeof(T));
+    T* global_ptr = (T*)src;
+    i32x4 srsrc = make_srsrc(global_ptr, GL::rows * (GL::cols / 32));
 
     llvm_amdgcn_raw_buffer_load_lds(
         srsrc, // buffer resource
@@ -186,6 +184,30 @@ __device__ inline static void load_one(RT& dst, ST& src, uint32_t* swizzled_offs
         : "=v"(*reinterpret_cast<float4*>(&dst.tiles[register_row][register_col].data[idx]))
         : "v"(swizzled_offsets[k]), "i"(register_row * row_stride)
         : "memory"
+    );
+}
+
+// Need to do ptr math on dst in the caller for pipeline stage
+// Need to do ptr math on src in the caller for pipeline stage and warp
+__device__ inline static void load_one_scale(fp8e8m0* dst, fp8e8m0* src) {
+    dst[0] = src[kittens::laneid()];
+}
+
+template<int opsel_a, int opsel_b, typename D, typename A, typename B, typename C>
+__device__ inline void mma_ABt_one(D& d_mma, const A& a_mma, const B& b_mma, const C& c_mma, int n, int m, int k, const fp8e8m0_4* scale_a, const fp8e8m0_4* scale_b) {
+    static_assert(D::rows == A::rows && D::cols == B::rows); // Check D matches A, B
+    static_assert(A::cols == B::cols); // Check reduction dim is same
+    static_assert(D::rows == C::rows && D::cols == C::cols); // Check D matches C
+    static_assert(std::is_same_v<typename D::T, float> && std::is_same_v<typename A::T, fp8e4m3> &&
+                  std::is_same_v<typename B::T, fp8e4m3> && std::is_same_v<typename C::T, float>);
+
+    mma_ABt_base_scaled<opsel_a, opsel_b>(
+        d_mma.tiles[n][m],
+        a_mma.tiles[n][k],
+        b_mma.tiles[m][k],
+        c_mma.tiles[n][m],
+        scale_a,
+        scale_b
     );
 }
 
