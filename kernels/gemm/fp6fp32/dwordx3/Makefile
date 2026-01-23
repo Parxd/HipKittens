@@ -22,7 +22,7 @@ endif
 # Common variables and flags
 CXX_STD   := c++20
 ICXXFLAGS := -std=$(CXX_STD)
-ICPPFLAGS := -I../../../include -I$(HIP_INCLUDE_DIR)
+ICPPFLAGS := -I../include -I$(HIP_INCLUDE_DIR)
 ILDFLAGS  :=
 ILDLIBS   :=
 
@@ -34,7 +34,7 @@ ICPPFLAGS += $(CPPFLAGS)
 ILDFLAGS  += $(LDFLAGS)
 ILDLIBS   += $(LDLIBS)
 
-ICXXFLAGS+= -I../../../include -Rpass-analysis=kernel-resource-usage 
+ICXXFLAGS+= -I../include -Rpass-analysis=kernel-resource-usage 
 
 
 # Default target
