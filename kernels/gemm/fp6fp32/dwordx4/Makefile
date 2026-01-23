@@ -36,6 +36,10 @@ ILDLIBS   += $(LDLIBS)
 
 ICXXFLAGS+= -I../include -Rpass-analysis=kernel-resource-usage 
 
+# Additional targets
+SCALED_TARGET=scaled
+SCALED_SRC=16x16x128_scaled.cpp
+
 # Default target
 all: $(TARGET)
 
@@ -43,6 +47,16 @@ $(TARGET): $(SRC)
 	$(HIPCXX) $(SRC) $(HIPFLAGS) $(ICXXFLAGS) $(ICPPFLAGS) $(ILDFLAGS) \
 	    -o $(TARGET)
 
+# Scaled MFMA target
+scaled: $(SCALED_TARGET)
+
+$(SCALED_TARGET): $(SCALED_SRC)
+	$(HIPCXX) $(SCALED_SRC) $(HIPFLAGS) $(ICXXFLAGS) $(ICPPFLAGS) $(ILDFLAGS) \
+	    -o $(SCALED_TARGET)
+
+# Build all targets
+all-tests: $(TARGET) $(SCALED_TARGET)
+
 # Clean target
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(SCALED_TARGET)
