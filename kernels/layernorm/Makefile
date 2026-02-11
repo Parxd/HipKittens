@@ -1,5 +1,5 @@
 # Compiler
-GPU_TARGET=CDNA4
+GPU_TARGET=CDNA3
 
 TARGET=tk_kernel
 SRC=kernel.cpp
@@ -14,7 +14,7 @@ HIPCXX ?= $(ROCM_INSTALL_DIR)/bin/hipcc
 ifeq ($(GPU_TARGET),CDNA2)
 HIPFLAGS+= -DKITTENS_CDNA2 --offload-arch=gfx90a
 else ifeq ($(GPU_TARGET),CDNA3)
-HIPFLAGS+= -DKITTENS_CDNA3 --offload-arch=gfx942
+HIPFLAGS+= -DKITTENS_CDNA3 --offload-arch=gfx942 -I$(ROCM_INSTALL_DIR)/include/rocrand
 else ifeq ($(GPU_TARGET),CDNA4)
 HIPFLAGS+= -DKITTENS_CDNA4 --offload-arch=gfx950 -DHIP_ENABLE_WARP_SYNC_BUILTINS -ffast-math -I/opt/rocm/include/rocrand
 
@@ -43,13 +43,13 @@ ICXXFLAGS+= -I${THUNDERKITTENS_ROOT}/include -I${THUNDERKITTENS_ROOT}/prototype 
 # Default target
 all: $(TARGET)
 
-LOGDIR := /workdir/data_logs/$(shell date +%m%d_%H%M%S)_outputs
-LOGFILE := $(LOGDIR)/make_build.log
+# LOGDIR := /workdir/data_logs/$(shell date +%m%d_%H%M%S)_outputs
+# LOGFILE := $(LOGDIR)/make_build.log
 
 $(TARGET): $(SRC)
-	@mkdir -p $(LOGDIR)
+	# @mkdir -p $(LOGDIR)
 	$(HIPCXX) $(SRC) $(HIPFLAGS) $(ICXXFLAGS) $(ICPPFLAGS) $(ILDFLAGS) \
-	    -o $(TARGET)$(shell python3-config --extension-suffix) 2>&1 | tee $(LOGFILE)
+	    -o $(TARGET)$(shell python3-config --extension-suffix) 2>&1 # | tee $(LOGFILE)
 
 # Clean target
 clean:

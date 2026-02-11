@@ -4,7 +4,7 @@
 Load docker:
 ```bash
 podman run -it --privileged --network=host --ipc=host \
-  -v /shared/amdgpu/home/tech_ops_amd_xqh/simran:/workdir \
+  -v $(pwd):/workdir \
   --workdir /workdir docker.io/rocm/pytorch \
   bash
 ```
@@ -12,7 +12,7 @@ podman run -it --privileged --network=host --ipc=host \
 Or:
 ```bash
 docker run -it --privileged --network=host --ipc=host \
-  -v /shared/amdgpu/home/tech_ops_amd_xqh/simran:/workdir \
+  -v $(pwd):/workdir \
   --workdir /workdir docker.io/rocm/pytorch \
   bash
 ```

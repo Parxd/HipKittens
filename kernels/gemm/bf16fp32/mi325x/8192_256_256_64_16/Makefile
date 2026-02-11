@@ -9,7 +9,7 @@ THUNDERKITTENS_ROOT ?= $(abspath ../../../../../)
 SRC=256_256_64_16.cpp
 
 # HIP variables
-ROCM_INSTALL_DIR := /opt/rocm-7.0.0
+ROCM_INSTALL_DIR := $(ROCM_PATH)
 HIP_INCLUDE_DIR  := $(ROCM_INSTALL_DIR)/include/hip
 ROCM_INCLUDE_DIR := $(ROCM_INSTALL_DIR)/include
 
@@ -32,7 +32,7 @@ ILDLIBS   :=
 CXXFLAGS ?= -Wall -Wextra
 CXXFLAGS := -w
 
-ICXXFLAGS += $(CXXFLAGS) --save-temps
+ICXXFLAGS += $(CXXFLAGS)
 ICPPFLAGS += $(CPPFLAGS)
 ILDFLAGS  += $(LDFLAGS)
 ILDLIBS   += $(LDLIBS)

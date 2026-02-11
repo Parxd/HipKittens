@@ -25,7 +25,7 @@ template <int _N> struct rmsnorm_globals{
     gamma_gl gamma;
     float epsilon;
 
-    const int n_per_tile = 4;
+    const int n_per_tile = NUM_WORKERS;
     const int n_tile_size = N / n_per_tile;
 
     dim3 grid() { return dim3(n_tile_size, B, 1); }
