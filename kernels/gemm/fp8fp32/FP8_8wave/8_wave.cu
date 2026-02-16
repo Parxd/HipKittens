@@ -8,6 +8,8 @@ using namespace kittens;
 #include "../profile_utils.cpp"
 #include "./utils.cpp"
 
+#define SIZE 8192
+
 constexpr int NUM_WARPS = 8;
 
 using G = kittens::group<NUM_WARPS>;
@@ -100,7 +102,7 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
     __builtin_amdgcn_s_barrier();
 
     // Inner loop over K dimension
-    #pragma unroll 
+    #pragma unroll 2
     for (int k = 0; k < k_iters - 2; k++, tic^=1, toc^=1) {
         
         auto bs_subtile0 = kittens::subtile_inplace<REG_BLOCK_N, BLOCK_K>(Bs[tic][0], {warp_n, 0});
@@ -252,7 +254,7 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
 }
 
 // Rotating buffer configuration (global constant)
-constexpr int ROTATING_BUFFER_COUNT = ((((1024*1024)/8192)*512)/8192)/2; // 500 MiB
+constexpr int ROTATING_BUFFER_COUNT = ((((1024*1024)/SIZE)*512)/SIZE)/2; // 500 MiB
 
 // Random initialization function
 template <int M, int N, int K>
@@ -409,14 +411,14 @@ TimingResult matmul_host(std::vector<fp8e4m3>& a, std::vector<fp8e4m3>& b, std::
 
 int main() {
     // Reduced problem size for faster timing
-    constexpr int M = 8192;  // 256 threadblocks needed for 2048x2048
-    constexpr int N = 8192;  
-    constexpr int K = 8192;  // Smaller K for reasonable timing
+    constexpr int M = SIZE;  // 256 threadblocks needed for 2048x2048
+    constexpr int N = SIZE;  
+    constexpr int K = SIZE;  // Smaller K for reasonable timing
     constexpr int CUs = 256; // 256 threadblocks (1 outer iteration)
     
     // Timing parameters to keep total runtime reasonable
-    constexpr int warmup_iters = 500;
-    constexpr int timing_iters = 100;
+    constexpr int warmup_iters = 1000;
+    constexpr int timing_iters = 1000;
 
     printf("Matrix dimensions: %dx%dx%d, CUs: %d\n", M, N, K, CUs);
     printf("Warmup iterations: %d, Timing iterations: %d\n\n", warmup_iters, timing_iters);
