@@ -1,0 +1,12 @@
+CompileFlags:
+  Add:
+    - -x
+    - hip
+    - -std=c++20
+    - -DKITTENS_CDNA3
+    - --offload-arch=gfx942
+    - -I/root/HipKittens/include
+    - -I/root/HipKittens/prototype
+    - -I/opt/rocm-7.1.0/include
+    - -I/opt/rocm-7.1.0/include/hip
+  Compiler: /opt/rocm-7.1.0/lib/llvm/bin/clang++
