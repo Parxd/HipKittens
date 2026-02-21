@@ -417,8 +417,8 @@ int main() {
     constexpr int CUs = 256; // 256 threadblocks (1 outer iteration)
     
     // Timing parameters to keep total runtime reasonable
-    constexpr int warmup_iters = 1000;
-    constexpr int timing_iters = 1000;
+    constexpr int warmup_iters = 500;
+    constexpr int timing_iters = 100;
 
     printf("Matrix dimensions: %dx%dx%d, CUs: %d\n", M, N, K, CUs);
     printf("Warmup iterations: %d, Timing iterations: %d\n\n", warmup_iters, timing_iters);
