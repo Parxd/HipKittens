@@ -158,8 +158,31 @@ __device__ __forceinline__ void clobber_gpr() {
 #undef CLOBBER_AREG_CASE
 #undef CLOBBER_VREG_CASE
 
+__device__ __forceinline__ uint32_t max_inst_offset_ds()
+{
+  // ENC_DS contains 2 8-bits instruction offset.
+  // For non-pk2 instructions like ds_read_b32, the 2 fields are regarded as 1.
+  // For pk2 instructions like ds_read2_b32, max offset is limited by 8 bits.
+  return (1u << 16) - 1;
+}
+
+__device__ __forceinline__ uint32_t max_inst_offset_ds_pk2()
+{
+  // ENC_DS contains 2 8-bits instruction offset.
+  // For non-pk2 instructions like ds_read_b32, the 2 fields are regarded as 1.
+  // For pk2 instructions like ds_read2_b32, max offset is limited by 8 bits.
+  return (1u << 8) - 1;
+}
+
+__device__ __forceinline__ uint32_t max_inst_offset_buf()
+{
+  // ENC_MUBUF contains 1 12-bits instruction offset.
+  return (1u << 12) - 1;
+}
+
 template<int GPR_START>
 __device__ __forceinline__ void ds_read_b32(const uint32_t smem_ptr, const int i_offset) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   // AGPRS
   if constexpr (GPR_START >= 256) {
     asm volatile("ds_read_b32 a[%0], %1 offset:%2"
@@ -177,6 +200,7 @@ __device__ __forceinline__ void ds_read_b32(const uint32_t smem_ptr, const int i
 
 template <typename T>
 __device__ __forceinline__ void ds_read_b32(T& dst, const uint32_t smem_ptr, const int i_offset) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t));
   asm volatile("ds_read_b32 %0, %1 offset:%2"
     : "=v"(dst)
@@ -186,6 +210,7 @@ __device__ __forceinline__ void ds_read_b32(T& dst, const uint32_t smem_ptr, con
 
 template <typename T = u32x2>
 __device__ __forceinline__ T ds_read_b64(const uint32_t smem_ptr, const int i_offset) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t) * 2);
   T result;
   asm volatile("ds_read_b64 %0, %1 offset:%2"
@@ -197,7 +222,7 @@ __device__ __forceinline__ T ds_read_b64(const uint32_t smem_ptr, const int i_of
 
 template<int GPR_START>
 __device__ __forceinline__ void ds_read_b64(const uint32_t smem_ptr, const int i_offset) {
-
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   constexpr int GPR_END = GPR_START + 1;
   // AGPRS
   if constexpr (GPR_START >= 256) {
@@ -216,8 +241,8 @@ __device__ __forceinline__ void ds_read_b64(const uint32_t smem_ptr, const int i
 
 template<int GPR_START>
 __device__ __forceinline__ void ds_read_b64_tr_b16(const uint32_t smem_ptr, const int i_offset) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   constexpr int GPR_END = GPR_START + 1;
-
   if constexpr (GPR_START >= 256) {
     asm volatile("ds_read_b64_tr_b16 a[%0:%1], %2 offset:%3"
       :
@@ -233,6 +258,7 @@ __device__ __forceinline__ void ds_read_b64_tr_b16(const uint32_t smem_ptr, cons
 
 template <typename T = u32x4>
 __device__ __forceinline__ T ds_read_b128(const uint32_t smem_ptr, const int i_offset) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t) * 4);
   T result;
   asm volatile("ds_read_b128 %0, %1 offset:%2"
@@ -244,7 +270,7 @@ __device__ __forceinline__ T ds_read_b128(const uint32_t smem_ptr, const int i_o
 
 template<int GPR_START>
 __device__ __forceinline__ void ds_read_b128(const uint32_t smem_ptr, const int i_offset) {
-
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   constexpr int GPR_END = GPR_START + 3;
   // AGPRS
   if constexpr (GPR_START >= 256) {
@@ -263,6 +289,7 @@ __device__ __forceinline__ void ds_read_b128(const uint32_t smem_ptr, const int 
 
 template<int GPR_START>
 __device__ __forceinline__ void ds_write_b32(const uint32_t smem_ptr, const int i_offset) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   if constexpr (GPR_START >= 256) {
     asm volatile("ds_write_b32 %0, a[%1], offset:%2"
       :
@@ -277,8 +304,8 @@ __device__ __forceinline__ void ds_write_b32(const uint32_t smem_ptr, const int 
 }
 
 template <typename T>
-__device__ __forceinline__ void ds_write_b32(const T& val, const uint32_t smem_ptr, const int i_offset = 0)
-{
+__device__ __forceinline__ void ds_write_b32(const T& val, const uint32_t smem_ptr, const int i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t));
   asm volatile("ds_write_b32 %0, %1 offset:%2"
     :
@@ -288,6 +315,7 @@ __device__ __forceinline__ void ds_write_b32(const T& val, const uint32_t smem_p
 
 template<int GPR_START>
 __device__ __forceinline__ void ds_write_b64(const uint32_t smem_ptr, const int i_offset) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   if constexpr (GPR_START >= 256) {
     asm volatile("ds_write_b64 %0, a[%1:%2], offset:%3"
       :
@@ -302,8 +330,8 @@ __device__ __forceinline__ void ds_write_b64(const uint32_t smem_ptr, const int 
 }
 
 template <typename T>
-__device__ __forceinline__ void ds_write_b64(const T& val, const uint32_t smem_ptr, const int i_offset = 0)
-{
+__device__ __forceinline__ void ds_write_b64(const T& val, const uint32_t smem_ptr, const int i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   static_assert(sizeof(T) == 2 * sizeof(uint32_t));
   asm volatile("ds_write_b64 %0, %1 offset:%2"
     :
@@ -313,6 +341,7 @@ __device__ __forceinline__ void ds_write_b64(const T& val, const uint32_t smem_p
 
 template<int GPR_START>
 __device__ __forceinline__ void ds_write_b128(const uint32_t smem_ptr, const int i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   if constexpr (GPR_START >= 256) {
     asm volatile("ds_write_b128 %0, a[%1:%2], offset:%3"
       :
@@ -328,6 +357,7 @@ __device__ __forceinline__ void ds_write_b128(const uint32_t smem_ptr, const int
 
 template<typename T>
 __device__ __forceinline__ void ds_write_b128(const T& value, const uint32_t smem_ptr, const int i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_ds(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(u32x4));
   asm volatile("ds_write_b128 %0, %1 offset:%2"
     :
@@ -337,6 +367,7 @@ __device__ __forceinline__ void ds_write_b128(const T& value, const uint32_t sme
 
 template<int GPR_START>
 __device__ __forceinline__ void buffer_load_dword(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   if constexpr (GPR_START >= 256) {
     asm volatile("buffer_load_dword a[%0], %1, %2, %3 offen offset:%4"
       :
@@ -353,6 +384,7 @@ __device__ __forceinline__ void buffer_load_dword(const buffer_resource& br, con
 template<typename T = uint32_t>
 __device__ __forceinline__ T buffer_load_dword(
   const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t));
   T result;
   asm volatile("buffer_load_dword %0, %1, %2, %3 offen offset:%4"
@@ -364,6 +396,7 @@ __device__ __forceinline__ T buffer_load_dword(
 
 template<int GPR_START>
 __device__ __forceinline__ void buffer_load_dwordx2(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   if constexpr (GPR_START >= 256) {
     asm volatile("buffer_load_dwordx2 a[%0:%1], %2, %3, %4 offen offset:%5"
       :
@@ -380,6 +413,7 @@ __device__ __forceinline__ void buffer_load_dwordx2(const buffer_resource& br, c
 template<typename T = u32x2>
 __device__ __forceinline__ T buffer_load_dwordx2(
   const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t) * 2);
   T result;
   asm volatile("buffer_load_dwordx2 %0, %1, %2, %3 offen offset:%4"
@@ -391,6 +425,7 @@ __device__ __forceinline__ T buffer_load_dwordx2(
 
 template<int GPR_START>
 __device__ __forceinline__ void buffer_load_dwordx4(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   if constexpr (GPR_START >= 256) {
     asm volatile("buffer_load_dwordx4 a[%0:%1], %2, %3, %4 offen offset:%5"
       :
@@ -407,6 +442,7 @@ __device__ __forceinline__ void buffer_load_dwordx4(const buffer_resource& br, c
 template<typename T = u32x4>
 __device__ __forceinline__ T buffer_load_dwordx4(
   const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t) * 4);
   T result;
   asm volatile("buffer_load_dwordx4 %0, %1, %2, %3 offen offset:%4"
@@ -418,7 +454,7 @@ __device__ __forceinline__ T buffer_load_dwordx4(
 
 template<int GPR>
 __device__ __forceinline__ void buffer_store_dword(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
-
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   // AGPRS
   if constexpr (GPR >= 256) {
     asm volatile("buffer_store_dword a[%0], %1, %2, %3 offen offset:%4"
@@ -437,6 +473,7 @@ __device__ __forceinline__ void buffer_store_dword(const buffer_resource& br, co
 template<typename T = u32x2>
 __device__ __forceinline__ void buffer_store_dword(
   const T& value, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t) * 2);
   asm volatile("buffer_store_dword %0, %1, %2, %3 offen offset:%4"
     :
@@ -446,7 +483,7 @@ __device__ __forceinline__ void buffer_store_dword(
 
 template<int GPR_START>
 __device__ __forceinline__ void buffer_store_dwordx2(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
-
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   // AGPRS
   if constexpr (GPR_START >= 256) {
     asm volatile("buffer_store_dwordx2 a[%0:%1], %2, %3, %4 offen offset:%5"
@@ -465,6 +502,7 @@ __device__ __forceinline__ void buffer_store_dwordx2(const buffer_resource& br, 
 template<typename T = u32x2>
 __device__ __forceinline__ void buffer_store_dwordx2(
   const T& value, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t) * 2);
   asm volatile("buffer_store_dwordx2 %0, %1, %2, %3 offen offset:%4"
     :
@@ -474,7 +512,7 @@ __device__ __forceinline__ void buffer_store_dwordx2(
 
 template<int GPR_START>
 __device__ __forceinline__ void buffer_store_dwordx4(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
-
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   // AGPRS
   if constexpr (GPR_START >= 256) {
     asm volatile("buffer_store_dwordx4 a[%0:%1], %2, %3, %4 offen offset:%5"
@@ -493,6 +531,7 @@ __device__ __forceinline__ void buffer_store_dwordx4(const buffer_resource& br, 
 template<typename T = u32x4>
 __device__ __forceinline__ void buffer_store_dwordx4(
   const T& value, const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const uint32_t i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   static_assert(sizeof(T) == sizeof(uint32_t) * 4);
   asm volatile("buffer_store_dwordx4 %0, %1, %2, %3 offen offset:%4"
     :
@@ -502,6 +541,7 @@ __device__ __forceinline__ void buffer_store_dwordx4(
 
 template<int GPR>
 __device__ __forceinline__ void buffer_atomic_pk_add_bf16(const buffer_resource& br, const uint32_t v_offset, const uint32_t s_offset = 0, const int i_offset = 0) {
+  static_assert(i_offset <= max_inst_offset_buf(), "Instruction offset is out of range");
   if constexpr (GPR >= 256) {
     asm volatile("buffer_atomic_pk_add_bf16 a[%0], %1, %2, %3 offen offset:%4"
       :
