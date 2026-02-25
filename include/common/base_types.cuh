@@ -37,20 +37,6 @@ using bf16_2 = __hip_bfloat162;
  * @brief Packed word of two half-precision floating-point values.
  */
 using half_2 = __half2;
-#ifdef KITTENS_CDNA4
-/**
- * @brief float8 floating-point type.
- */
-using fp8e4m3 = __hip_fp8_e4m3;
-/**
- * @brief Packed word of two float8 floating-point values.
- */
-using fp8e4m3_2 = __hip_fp8x2_e4m3;
-/**
- * @brief Packed word of four float8 floating-point values.
- */
-using fp8e4m3_4 = __hip_fp8x4_e4m3;
-#else
 /**
  * @brief float8 floating-point type.
  */
@@ -63,7 +49,6 @@ using fp8e4m3_2 = __hip_fp8x2_e4m3_fnuz;
  * @brief Packed word of four float8 floating-point values.
  */
 using fp8e4m3_4 = __hip_fp8x4_e4m3_fnuz;
-#endif
 
 namespace ducks {
 /**
@@ -250,6 +235,20 @@ template<> struct packing<fp8e4m3_4> {
     using unpacked_type = fp8e4m3;
     using packed_type = fp8e4m3_4;
 };
+
+/**
+ * @brief Pack four float8 into 32-bits (HIP doesn't provide such a constructor).
+ */
+static __host__ __device__ inline fp8e4m3_4 make_fp8e4m3_4(fp8e4m3 x, fp8e4m3 y, fp8e4m3 z, fp8e4m3 w) {
+    return std::bit_cast<fp8e4m3_4>(
+        static_cast<uint32_t>(
+            std::bit_cast<uint8_t>(x) | 
+            (std::bit_cast<uint8_t>(y) << 8) | 
+            (std::bit_cast<uint8_t>(z) << 16) | 
+            (std::bit_cast<uint8_t>(w) << 24)
+        )
+    );
+}
 
 /**
  * @brief Provides templated functionality to convert between different types.

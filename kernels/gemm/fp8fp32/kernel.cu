@@ -4,17 +4,31 @@
 #include "common/base_types.cuh"
 #include "common/util.cuh"
 #include "kittens.cuh" 
+#include "ops/warp/register/tile/conversions.cuh"
+#include "types/register/rt_layout.cuh"
 #include "types/shared/st.cuh"
+#include "types/shared/st_layout.cuh"
 
 using namespace kittens;
 
 #define NUM_WARPS 1
+#define BLOCK_M 256
+#define BLOCK_N 256
+#define BLOCK_K 128
+#define REG_MN 128
+#define REG_K 64
+
 using G = kittens::group<NUM_WARPS>;
 using _gl = gl<fp8e4m3,-1,-1,-1,-1>;
 
-__global__ __launch_bounds__(kittens::WARP_THREADS, 1)
+__global__ __launch_bounds__(NUM_WARPS * kittens::WARP_THREADS, 2)  // launch_bounds(max_threads_per_block, min_warps_per_simd)
 void matmul_device(const _gl A, const _gl B, _gl C) {
-    // __builtin_amdgcn_mfma_f32_16x16x32_fp8_fp8();
+    extern __shared__ alignment_dummy __shm[];
+    shared_allocator al((int*)&__shm[0]);
+    auto (&lds) = al.allocate<st<fp8e4m3, BLOCK_N, BLOCK_K, ducks::st_layout::col>>();
+    rt<fp8e4m3, REG_MN, REG_K, ducks::rt_layout::col> reg;
+    
+    load(reg, subtile_inplace<REG_MN, REG_K>(lds, {0, 0}));
 }
 
 int main() {
