@@ -92,20 +92,30 @@ namespace kittens {
         dtype data[rows*cols]; ///< Raw data storage for the tile.
         
         __device__ static inline T* idx(T *ptr, int2 coord) { // naive row-major coord default
-            int r = coord.x, c = coord.y; // alias
-            const int outer_idx = c/subtile_cols;
-            const uint64_t addr = (uint64_t)(&ptr[outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
-            const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
-    
-            return (T*)(addr ^ swizzle);
+            if constexpr (std::is_same_v<layout, ducks::st_layout::row>) {
+                int r = coord.x, c = coord.y; // alias
+                const int outer_idx = c/subtile_cols;
+                const uint64_t addr = (uint64_t)(&ptr[outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
+                const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
+        
+                return (T*)(addr ^ swizzle);
+            }
+            else {
+                
+            }
         }
         __device__ static inline uint32_t idx(uint32_t ptr, int2 coord) {
-            int r = coord.x, c = coord.y; // alias
-            const int outer_idx = c/subtile_cols;
-            const uint32_t addr = ptr + sizeof(T)*(outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols);
-            const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
-    
-            return (addr ^ swizzle);
+            if constexpr (std::is_same_v<layout, ducks::st_layout::row>) {
+                int r = coord.x, c = coord.y; // alias
+                const int outer_idx = c/subtile_cols;
+                const uint32_t addr = ptr + sizeof(T)*(outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols);
+                const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
+        
+                return (addr ^ swizzle);
+            }
+            else {
+
+            }
         }
         /**
          * @brief Access a shared tile element using a row and column, as if the tile were row-major.

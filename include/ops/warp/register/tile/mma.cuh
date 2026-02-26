@@ -130,6 +130,12 @@ __device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::col>
                                      const rt_base<float, ducks::rt_layout::col> &c) {
     mfma161616(d.data, a.data, b.data, c.data);
 }
+__device__ static inline void mma_AtB_base(rt_base<float, ducks::rt_layout::col> &d,
+                                     const rt_base<fp8e4m3, ducks::rt_layout::col> &a,
+                                     const rt_base<fp8e4m3, ducks::rt_layout::col> &b, // in col-major mode
+                                     const rt_base<float, ducks::rt_layout::col> &c) {
+    mfma161632(d.data, a.data, b.data, c.data);
+}
 /**
  * @brief Base matrix multiply-accumulate operation for row layout with transposed A and B.
  *
@@ -287,7 +293,9 @@ __device__ static inline void mma_AtB(D &d,
         (std::is_same_v<typename D::T, float> && std::is_same_v<typename A::T, bf16> &&
             std::is_same_v<typename B::T, bf16> && std::is_same_v<typename C::T, float>) ||
         (std::is_same_v<typename D::T, half> && std::is_same_v<typename A::T, half> &&
-            std::is_same_v<typename B::T, half> && std::is_same_v<typename C::T, half>)
+            std::is_same_v<typename B::T, half> && std::is_same_v<typename C::T, half>) ||
+        (std::is_same_v<typename  D::T, float> && std::is_same_v<typename A::T, fp8e4m3> &&
+            std::is_same_v<typename B::T, fp8e4m3> && std::is_same_v<typename C::T, float>)
     );
 
     #pragma unroll
