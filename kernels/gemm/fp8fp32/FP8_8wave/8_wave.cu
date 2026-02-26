@@ -8,7 +8,7 @@ using namespace kittens;
 #include "../profile_utils.cpp"
 #include "./utils.cpp"
 
-#define SIZE 16384
+#define SIZE 8192
 
 constexpr int NUM_WARPS = 8;
 
