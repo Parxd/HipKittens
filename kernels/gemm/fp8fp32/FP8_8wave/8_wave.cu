@@ -94,8 +94,8 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
     asm volatile("s_waitcnt vmcnt(4)");
     __builtin_amdgcn_s_barrier();
 
-    G::load(As[toc][0], A, {0, 0, block_row * 2, 1}, swizzled_offsets_A);
     G::load(Bs[toc][0], B, {0, 0, block_col * 2, 1}, swizzled_offsets_B);
+    G::load(As[toc][0], A, {0, 0, block_row * 2, 1}, swizzled_offsets_A);
     G::load(Bs[toc][1], B, {0, 0, block_col * 2 + 1, 1}, swizzled_offsets_B);
 
     asm volatile("s_waitcnt vmcnt(6)");
@@ -122,8 +122,8 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
 
         auto bs_subtile1 = kittens::subtile_inplace<REG_BLOCK_N, BLOCK_K>(Bs[tic][1], {warp_n, 0});
         load_st_to_rt<RT_B, decltype(bs_subtile1)>(b1, bs_subtile1);
-        G::load(As[tic][0], A, {0, 0, block_row * 2, k + 2}, swizzled_offsets_A);
-        __builtin_amdgcn_s_barrier(); 
+        G::load(Bs[tic][0], B, {0, 0, block_col * 2, k + 2}, swizzled_offsets_B);
+        __builtin_amdgcn_s_barrier();
 
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_s_setprio(1);
@@ -133,7 +133,7 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
 
         auto as_subtile1 = kittens::subtile_inplace<REG_BLOCK_M, BLOCK_K>(As[tic][1], {warp_m, 0});
         load_st_to_rt<RT_A, decltype(as_subtile1)>(a, as_subtile1);
-        G::load(Bs[tic][0], B, {0, 0, block_col * 2, k + 2}, swizzled_offsets_B);
+        G::load(As[tic][0], A, {0, 0, block_row * 2, k + 2}, swizzled_offsets_A);
         __builtin_amdgcn_s_barrier();
 
         asm volatile("s_waitcnt lgkmcnt(0)");
@@ -182,6 +182,7 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
 
         auto as_subtile1 = kittens::subtile_inplace<REG_BLOCK_M, BLOCK_K>(As[tic][1], {warp_m, 0});
         load_st_to_rt<RT_A, decltype(as_subtile1)>(a, as_subtile1);
+        asm volatile("s_waitcnt vmcnt(4)");  // at most vmcnt(6) is required by here
         __builtin_amdgcn_s_barrier();
 
 
@@ -193,7 +194,7 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
 
         bs_subtile0 = kittens::subtile_inplace<REG_BLOCK_N, BLOCK_K>(Bs[toc][0], {warp_n, 0});
         load_st_to_rt<RT_B, decltype(bs_subtile0)>(b0, bs_subtile0);
-        asm volatile("s_waitcnt vmcnt(4)");
+        // at most vmcnt(4) is required by here
         __builtin_amdgcn_s_barrier();
 
         asm volatile("s_waitcnt lgkmcnt(0)");
@@ -210,7 +211,7 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
 
         auto as_subtile0 = kittens::subtile_inplace<REG_BLOCK_M, BLOCK_K>(As[tic][0], {warp_m, 0});
         load_st_to_rt<RT_A, decltype(as_subtile0)>(a, as_subtile0);
-        asm volatile("s_waitcnt vmcnt(2)");
+        asm volatile("s_waitcnt vmcnt(0)");  // at most vmcnt(2) is required by here
         __builtin_amdgcn_s_barrier();
 
         asm volatile("s_waitcnt lgkmcnt(0)");
@@ -221,7 +222,7 @@ __global__ __launch_bounds__(512, 2) void matmul_device(const kittens::gl<fp8e4m
 
         auto bs_subtile1 = kittens::subtile_inplace<REG_BLOCK_N, BLOCK_K>(Bs[tic][1], {warp_n, 0});
         load_st_to_rt<RT_B, decltype(bs_subtile1)>(b1, bs_subtile1);
-        asm volatile("s_waitcnt vmcnt(0)");
+        // at most vmcnt(0) is required by here
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
