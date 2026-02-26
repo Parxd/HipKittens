@@ -13,6 +13,8 @@
 #include <hip/hip_runtime.h>
 
 #include "base_types.cuh"
+#include "../types/register/rt_layout.cuh"
+#include "../types/shared/st_layout.cuh"
 
 #ifndef __forceinline__
 #define __forceinline__ __attribute__((always_inline))

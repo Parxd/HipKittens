@@ -157,6 +157,7 @@ namespace kittens {
         using T = ST::T;
         using T2 = ST::T2;
         using dtype = T; ///< Data type of the elements in the tile.
+        using layout = _layout;
     
         static constexpr int underlying_rows          = ST::underlying_rows;
         static_assert(underlying_rows % kittens::TILE_ROW_DIM<T, layout> == 0, "Underlying rows must be divisible by the tile dimension");
