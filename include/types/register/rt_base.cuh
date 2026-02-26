@@ -55,10 +55,9 @@ template<typename _T, ducks::rt_layout::all _layout> struct rt_base {
         std::is_same_v<dtype, bf16_2> || std::is_same_v<dtype, float2> || std::is_same_v<dtype, half_2> || std::is_same_v<dtype, fp8e4m3_4>,
         "rt_base was provided an unsupported type."
     );
-    
-    static constexpr bool col_fp8 = std::is_same_v<layout, ducks::rt_layout::col> && std::is_same_v<dtype, fp8e4m3_4>;
-    static constexpr int tile_size_row = col_fp8 ? kittens::TILE_COL_DIM<T> : kittens::TILE_ROW_DIM<T>;
-    static constexpr int tile_size_col = col_fp8 ? kittens::TILE_ROW_DIM<T> : kittens::TILE_COL_DIM<T>;
+
+    static constexpr int tile_size_row        = kittens::TILE_ROW_DIM<T, layout>;
+    static constexpr int tile_size_col        = kittens::TILE_COL_DIM<T, layout>;
     static constexpr int rows                 = tile_size_row; ///< Number of rows.
     static constexpr int cols                 = tile_size_col; ///< Number of cols.
     static constexpr int num_elements         = rows*cols;

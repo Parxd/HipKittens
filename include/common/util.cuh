@@ -30,8 +30,17 @@ namespace kittens {
 /**
  * @brief Tile dimension constant.
  */
-template<typename T> constexpr int TILE_COL_DIM = sizeof(T) == 1 ? 32 : 16;
-template<typename T> constexpr int TILE_ROW_DIM = 16;
+template<typename T>
+concept all_layouts = ducks::rt_layout::all<T> || ducks::st_layout::all<T>;
+
+template<all_layouts layout>
+constexpr bool is_col_lt = std::is_same_v<layout, ducks::rt_layout::col> || std::is_same_v<layout, ducks::st_layout::col>;
+
+template<typename T, all_layouts layout=ducks::st_layout::row>
+constexpr int TILE_ROW_DIM = is_col_lt<layout> && sizeof(T) == 1 ? 32 : 16;
+
+template<typename T, all_layouts layout=ducks::st_layout::row>
+constexpr int TILE_COL_DIM = (!is_col_lt<layout> && sizeof(T) == 1) ? 32 : 16;
 
 /**
  * @brief Tile num elements constant calculated as TILE_DIM squared.

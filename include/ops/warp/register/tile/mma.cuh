@@ -39,6 +39,13 @@ __device__ static inline void mfma161616(float2 (&D)[2],
     );
 }
 
+__device__ static inline void mfma161632(float2 (&D)[2],
+                                        const fp8e4m3_4 (&A)[2],
+                                        const fp8e4m3_4 (&B)[2],
+                                        const float2 (&C)[2]) {
+    typedef __attribute__((__vector_size__()))
+}
+
 
 /**
  * @brief Base matrix multiply-accumulate operation for row layout.

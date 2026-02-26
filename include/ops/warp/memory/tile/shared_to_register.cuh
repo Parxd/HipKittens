@@ -77,7 +77,7 @@ __device__ inline static void load(RT &dst, const ST &src) {
                         asm volatile(
                             "ds_read_b64 %0, %1 offset:%2\n"
                             : "=v"(*reinterpret_cast<uint64_t*>(&dst.tiles[i][j].data[0]))
-                            : "v"(addr), "i"(i * ST::underlying_cols * kittens::TILE_ROW_DIM<U> * sizeof(U))
+                            : "v"(addr), "i"(i * ST::underlying_cols * kittens::TILE_ROW_DIM<U, typename ST::layout> * sizeof(U))
                             : "memory"
                         );
                     } else {

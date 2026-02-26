@@ -59,24 +59,16 @@ namespace kittens {
         // define underlying data as same as that projected, to make clear that this is *not* a subtile.
         static constexpr int underlying_rows          = _rows;
         static constexpr int underlying_cols          = _cols;
-        static constexpr int underlying_height        = std::is_same_v<layout, ducks::st_layout::row> ? 
-                                                        _rows / kittens::TILE_ROW_DIM<T> : 
-                                                        _rows / kittens::TILE_COL_DIM<T>;
-        static constexpr int underlying_width         = std::is_same_v<layout, ducks::st_layout::row> ?
-                                                        _cols / kittens::TILE_COL_DIM<T> : 
-                                                        _cols / kittens::TILE_ROW_DIM<T>;
+        static constexpr int underlying_height        = _rows / kittens::TILE_ROW_DIM<T, layout>;
+        static constexpr int underlying_width         = _cols / kittens::TILE_COL_DIM<T, layout>;
         static constexpr int underlying_num_elements  = underlying_rows * underlying_cols;
     
         static constexpr int rows                = _rows; ///< Total number of rows in the tile.
-        static_assert(rows % kittens::TILE_ROW_DIM<T> == 0, "Rows must be divisible by the tile dimension");
+        static_assert(rows % kittens::TILE_ROW_DIM<T, layout> == 0, "Rows must be divisible by the tile dimension");
         static constexpr int cols                = _cols; ///< Total number of cols in the tile.
-        static_assert(cols % kittens::TILE_COL_DIM<T> == 0, "Cols must be divisible by the tile dimension");
-        static constexpr int height              = std::is_same_v<layout, ducks::st_layout::row> ? 
-                                                    _rows / kittens::TILE_ROW_DIM<T> : 
-                                                    _rows / kittens::TILE_COL_DIM<T>; ///< Height of the tile in terms of 16-element subtiles.
-        static constexpr int width               = std::is_same_v<layout, ducks::st_layout::row> ?
-                                                    _cols / kittens::TILE_COL_DIM<T> : 
-                                                    _cols / kittens::TILE_ROW_DIM<T>; ///< Width of the tile in terms of 16-element subtiles.
+        static_assert(cols % kittens::TILE_COL_DIM<T, layout> == 0, "Cols must be divisible by the tile dimension");
+        static constexpr int height              = _rows / kittens::TILE_ROW_DIM<T, layout>; ///< Height of the tile in terms of 16-element subtiles.
+        static constexpr int width               = _cols / kittens::TILE_COL_DIM<T, layout>; ///< Width of the tile in terms of 16-element subtiles.
         static constexpr int num_elements        = rows * cols; ///< Total number of elements in the tile.
     
         static_assert(base_types::packing<dtype>::num() == 1); // must be a 1-packed type (e.g. float, bf16, etc)
@@ -165,25 +157,21 @@ namespace kittens {
         using T = ST::T;
         using T2 = ST::T2;
         using dtype = T; ///< Data type of the elements in the tile.
-        using layout = _ST::layout;
+    
         static constexpr int underlying_rows          = ST::underlying_rows;
-        static_assert(underlying_rows % kittens::TILE_ROW_DIM<T> == 0, "Underlying rows must be divisible by the tile dimension");
+        static_assert(underlying_rows % kittens::TILE_ROW_DIM<T, layout> == 0, "Underlying rows must be divisible by the tile dimension");
         static constexpr int underlying_cols          = ST::underlying_cols;
-        static_assert(underlying_cols % kittens::TILE_COL_DIM<T> == 0, "Underlying cols must be divisible by the tile dimension");
+        static_assert(underlying_cols % kittens::TILE_COL_DIM<T, layout> == 0, "Underlying cols must be divisible by the tile dimension");
         static constexpr int underlying_height        = ST::underlying_height;
         static constexpr int underlying_width         = ST::underlying_width;
         static constexpr int underlying_num_elements  = ST::underlying_num_elements;
     
         static constexpr int rows                = _subtile_rows;
-        static_assert(rows % kittens::TILE_ROW_DIM<T> == 0, "Rows must be divisible by the tile dimension");
+        static_assert(rows % kittens::TILE_ROW_DIM<T, layout> == 0, "Rows must be divisible by the tile dimension");
         static constexpr int cols                = _subtile_cols;
-        static_assert(cols % kittens::TILE_COL_DIM<T> == 0, "Cols must be divisible by the tile dimension");
-        static constexpr int height              = std::is_same_v<layout, ducks::st_layout::row> ? 
-                                                    rows / kittens::TILE_ROW_DIM<T> : 
-                                                    rows / kittens::TILE_COL_DIM<T>;
-        static constexpr int width               = std::is_same_v<layout, ducks::st_layout::row> ?
-                                                    cols / kittens::TILE_COL_DIM<T> : 
-                                                    cols / kittens::TILE_ROW_DIM<T>; 
+        static_assert(cols % kittens::TILE_COL_DIM<T, layout> == 0, "Cols must be divisible by the tile dimension");
+        static constexpr int height              = rows / kittens::TILE_ROW_DIM<T, layout>;
+        static constexpr int width               = cols / kittens::TILE_COL_DIM<T, layout>;
         static constexpr int num_elements        = rows * cols;
     
         static constexpr int swizzle_bytes = ST::swizzle_bytes;
