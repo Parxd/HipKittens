@@ -239,7 +239,7 @@ template<> struct packing<fp8e4m3_4> {
 /**
  * @brief Pack four float8 into 32-bits (HIP doesn't provide such a constructor).
  */
-static __host__ __device__ inline fp8e4m3_4 make_fp8e4m3_4(fp8e4m3 x, fp8e4m3 y, fp8e4m3 z, fp8e4m3 w) {
+static __host__ __device__ inline fp8e4m3_4 make_fp8e4m3_4(const fp8e4m3 & x, const fp8e4m3 & y, const fp8e4m3 & z, const fp8e4m3 & w) {
     return std::bit_cast<fp8e4m3_4>(
         static_cast<uint32_t>(
             std::bit_cast<uint8_t>(x) | 

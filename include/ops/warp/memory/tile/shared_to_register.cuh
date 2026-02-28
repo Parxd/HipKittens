@@ -91,7 +91,7 @@ __device__ inline static void load(RT &dst, const ST &src) {
                 }
             }
             else { // handle the column-major layout
-                if constexpr (sizeof(T) == 1) {
+                if constexpr (std::is_same_v<T, fp8e4m3>) {
                     dst.tiles[i][j].data[0] = base_types::convertor<T2, U2>::convert(
                         base_types::make_fp8e4m3_4(
                             src[{row, col}], src[{row+1, col}], src[{row+2, col}], src[{row+3, col}]
