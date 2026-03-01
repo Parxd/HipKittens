@@ -75,7 +75,10 @@ namespace kittens {
     
         static constexpr int swizzle_bytes = (
             sizeof(dtype) == 1 ? (
-                std::is_same_v<layout, ducks::st_layout::col> ? 8 :
+                std::is_same_v<layout, ducks::st_layout::col> ? (
+                    underlying_width%4 == 0 ? 64 :
+                    underlying_width%2 == 0 ? 32 : 16
+                ) :
                 underlying_width%4 == 0 ? 128 :
                 underlying_width%2 == 0 ?  64 : 32
             ) :
@@ -93,40 +96,26 @@ namespace kittens {
         dtype data[rows*cols]; ///< Raw data storage for the tile.
         
         __device__ static inline T* idx(T *ptr, int2 coord) { // naive row-major coord default
-            if constexpr (sizeof(dtype) == 1 && std::is_same_v<layout, ducks::st_layout::col>) {
-                int r = coord.x, c = coord.y; // alias
-                const int outer_idx = c/subtile_cols;
-                const uint64_t addr = (uint64_t)(&ptr[outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
-                const int swizzle = ((addr % 512) >> 8) << 3;
-        
-                return (T*)(addr ^ swizzle);
-            }
-            else {
-                int r = coord.x, c = coord.y; // alias
-                const int outer_idx = c/subtile_cols;
-                const uint64_t addr = (uint64_t)(&ptr[outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
-                const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
-        
-                return (T*)(addr ^ swizzle);
-            }
+            int r = coord.x, c = coord.y; // alias
+            const int outer_idx = c/subtile_cols;
+            const uint64_t addr = (uint64_t)(&ptr[outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
+            const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
+
+            constexpr bool needs_extra = sizeof(dtype) == 1 && std::is_same_v<layout, ducks::st_layout::col>;
+            const int extra = needs_extra ? ((addr % swizzle_repeat) >> 7) << 4 : 0;
+            
+            return (T*)(addr ^ swizzle ^ extra);
         }
         __device__ static inline uint32_t idx(uint32_t ptr, int2 coord) {
-            if constexpr (sizeof(dtype) == 1 && std::is_same_v<layout, ducks::st_layout::col>) {
-                int r = coord.x, c = coord.y; // alias
-                const int outer_idx = c/subtile_cols;
-                const uint32_t addr = ptr + sizeof(T)*(outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols);
-                const int swizzle = ((addr % 512) >> 8) << 3;
-        
-                return (addr ^ swizzle);
-            }
-            else {
-                int r = coord.x, c = coord.y; // alias
-                const int outer_idx = c/subtile_cols;
-                const uint32_t addr = ptr + sizeof(T)*(outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols);
-                const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
-        
-                return (addr ^ swizzle);
-            }
+            int r = coord.x, c = coord.y; // alias
+            const int outer_idx = c/subtile_cols;
+            const uint32_t addr = ptr + sizeof(T)*(outer_idx*rows*subtile_cols + r*subtile_cols + c%subtile_cols);
+            const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
+
+            constexpr bool needs_extra = sizeof(dtype) == 1 && std::is_same_v<layout, ducks::st_layout::col>;
+            const int extra = needs_extra ? ((addr % swizzle_repeat) >> 7) << 4 : 0;
+
+            return (uint32_t)(addr ^ swizzle ^ extra);
         }
         /**
          * @brief Access a shared tile element using a row and column, as if the tile were row-major.

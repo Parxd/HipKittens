@@ -24,24 +24,24 @@ void matmul_device(const _gl A, const _gl B, _gl_c C) {
     shared_allocator al((int*)&__shm[0]);
     // lds is 256 x 128 col-layout -- underlying subtiles should be 8 x 8
     // reg is 128 x 64 col-layout  -- underlying subtiles should be 4 x 4
-    auto (&lds_a) = al.allocate<st<fp8e4m3, 64, 64>>();
-    auto (&lds_b) = al.allocate<st<fp8e4m3, 64, 64>>();
-    rt<fp8e4m3, 64, 64> reg_a;
-    rt<fp8e4m3, 64, 64> reg_b;
-    rt<float,   64, 64, ducks::rt_layout::col> reg_c;
+    auto (&lds_a) = al.allocate<st<fp8e4m3, 64, 32, ducks::st_layout::col>>();
+    auto (&lds_b) = al.allocate<st<fp8e4m3, 64, 32, ducks::st_layout::col>>();
+    rt<fp8e4m3, 64, 32, ducks::rt_layout::col> reg_a;
+    rt<fp8e4m3, 64, 32, ducks::rt_layout::col> reg_b;
+    rt<float,   32, 32, ducks::rt_layout::col> reg_c;
     zero(reg_c);
 
     G::load(lds_a, A, {0, 0, 0, 0});
     G::load(lds_b, B, {0, 0, 0, 0});
 
-    load(reg_a, lds_a);
-    load(reg_b, lds_b);
-    asm volatile("s_waitcnt lgkmcnt(0)");
-    mma_ABt(reg_c, reg_a, reg_b, reg_c);
-    __builtin_amdgcn_s_barrier();
-    __builtin_amdgcn_sched_barrier(0);
+    // load(reg_a, lds_a);
+    // load(reg_b, lds_b);
+    // asm volatile("s_waitcnt lgkmcnt(0)");
+    // mma_AtB(reg_c, reg_a, reg_b, reg_c);
+    // __builtin_amdgcn_s_barrier();
+    // __builtin_amdgcn_sched_barrier(0);
 
-    store(C, reg_c, {0, 0});
+    // store(C, reg_c, {0, 0});
 
     /*
     FP32 DUMP LDS
@@ -93,7 +93,7 @@ void matmul_device(const _gl A, const _gl B, _gl_c C) {
 }
 
 int main() {
-    constexpr int M = 64, N = 64, K = 64;
+    constexpr int M = 48, N = 48, K = 32;
     fp8e4m3* a, *b;
     float* c;
     hipMallocManaged((void**)(&a), sizeof(fp8e4m3) * M * K);
@@ -111,19 +111,19 @@ int main() {
     //     val += 0.0625;
     // }
 
-    _gl   GL_A(a, 1, 1, M, K);
-    _gl   GL_B(b, 1, 1, N, K);
+    _gl   GL_A(a, 1, 1, K, M);
+    _gl   GL_B(b, 1, 1, K, N);
     _gl_c GL_C(c, 1, 1, M, N);
-    matmul_device<<<1, 64, sizeof(fp8e4m3) * M * K * 2, nullptr>>>(GL_A, GL_B, GL_C);
+    matmul_device<<<1, NUM_WARPS * kittens::WARP_THREADS, sizeof(fp8e4m3) * M * K * 2, nullptr>>>(GL_A, GL_B, GL_C);
     hipDeviceSynchronize();
 
-#if 1
+#if 0
     float c_ref[M * N];
     for (int m = 0; m < M; ++m) {
         for (int n = 0; n < N; ++n) {
             float acc = 0.0f;
             for (int k = 0; k < K; ++k) {
-                acc += float(a[m * K + k]) * float(b[n * K + k]);
+                acc += float(a[k * M + m]) * float(b[k * N + n]);
             }
             c_ref[m * N + n] = acc;
         }
