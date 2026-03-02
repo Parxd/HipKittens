@@ -202,24 +202,33 @@ namespace kittens {
             const int outer_idx = c/subtile_cols;
             const uint64_t addr = (uint64_t)(&ptr[outer_idx*underlying_rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
             const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
+
+            constexpr bool needs_extra = sizeof(dtype) == 1 && std::is_same_v<layout, ducks::st_layout::col>;
+            const int extra = needs_extra ? ((addr % swizzle_repeat) >> 7) << 4 : 0;
     
-            return (T*)(addr ^ swizzle);
+            return (T*)(addr ^ swizzle ^ extra);
         }
         __device__ inline const T* idx(const T *ptr, const int2 coord) const { // const version
             int r = coord.x+row_offset, c = coord.y+col_offset; // alias
             const int outer_idx = c/subtile_cols;
             const uint64_t addr = (uint64_t)(&ptr[outer_idx*underlying_rows*subtile_cols + r*subtile_cols + c%subtile_cols]);
             const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
+            
+            constexpr bool needs_extra = sizeof(dtype) == 1 && std::is_same_v<layout, ducks::st_layout::col>;
+            const int extra = needs_extra ? ((addr % swizzle_repeat) >> 7) << 4 : 0;
     
-            return (const T*)(addr ^ swizzle);
+            return (const T*)(addr ^ swizzle ^ extra);
         }
         __device__ inline uint32_t idx(uint32_t ptr, const int2 coord) const { // naive row-major coord default
             int r = coord.x+row_offset, c = coord.y+col_offset; // alias
             const int outer_idx = c/subtile_cols;
             const uint32_t addr = ptr + sizeof(T)*(outer_idx*underlying_rows*subtile_cols + r*subtile_cols + c%subtile_cols);
             const int swizzle = ((addr % swizzle_repeat) >> 7) << 3;
+
+            constexpr bool needs_extra = sizeof(dtype) == 1 && std::is_same_v<layout, ducks::st_layout::col>;
+            const int extra = needs_extra ? ((addr % swizzle_repeat) >> 7) << 4 : 0;
     
-            return (addr ^ swizzle);
+            return (addr ^ swizzle ^ extra);
         }
         /**
          * @brief Access a shared tile element using a row and column, as if the tile were row-major.

@@ -2,12 +2,15 @@
 #include <vector>
 #include <random>
 #include "amd_detail/amd_hip_runtime.h"
+#include "common/base_types.cuh"
 #include "common/util.cuh"
 #include "kittens.cuh" 
+#include "ops/warp/register/tile/conversions.cuh"
+#include "ops/warp/shared/tile/conversions.cuh"
 
 using namespace kittens;
 
-#define NUM_WARPS 1
+#define NUM_WARPS 16
 #define BLOCK_M 256
 #define BLOCK_N 256
 #define BLOCK_K 128
@@ -24,76 +27,32 @@ void matmul_device(const _gl A, const _gl B, _gl_c C) {
     shared_allocator al((int*)&__shm[0]);
     // lds is 256 x 128 col-layout -- underlying subtiles should be 8 x 8
     // reg is 128 x 64 col-layout  -- underlying subtiles should be 4 x 4
-    auto (&lds_a) = al.allocate<st<fp8e4m3, 64, 32, ducks::st_layout::col>>();
-    auto (&lds_b) = al.allocate<st<fp8e4m3, 64, 32, ducks::st_layout::col>>();
-    rt<fp8e4m3, 64, 32, ducks::rt_layout::col> reg_a;
-    rt<fp8e4m3, 64, 32, ducks::rt_layout::col> reg_b;
-    rt<float,   32, 32, ducks::rt_layout::col> reg_c;
+    auto (&lds_a) = al.allocate<st<fp8e4m3, 128, 256, ducks::st_layout::col>>();
+    auto (&lds_b) = al.allocate<st<fp8e4m3, 128, 256, ducks::st_layout::col>>();
+    rt<fp8e4m3, 128, 64, ducks::rt_layout::col> reg_a;
+    rt<fp8e4m3, 128, 64, ducks::rt_layout::col> reg_b;
+    rt<float,   64, 64, ducks::rt_layout::col> reg_c;
     zero(reg_c);
 
     G::load(lds_a, A, {0, 0, 0, 0});
     G::load(lds_b, B, {0, 0, 0, 0});
 
-    // load(reg_a, lds_a);
-    // load(reg_b, lds_b);
-    // asm volatile("s_waitcnt lgkmcnt(0)");
-    // mma_AtB(reg_c, reg_a, reg_b, reg_c);
-    // __builtin_amdgcn_s_barrier();
-    // __builtin_amdgcn_sched_barrier(0);
+    auto warp_id = warpid();
+    auto warp_row = warp_id / 4, warp_col = warp_id % 4;
+    load(reg_a, subtile_inplace<128, 64>(lds_a, {0, warp_row}));
+    load(reg_b, subtile_inplace<128, 64>(lds_b, {0, warp_col}));
 
-    // store(C, reg_c, {0, 0});
+    asm volatile("s_waitcnt lgkmcnt(0)");
+    __builtin_amdgcn_s_barrier();
+    mma_AtB(reg_c, reg_a, reg_b, reg_c);
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
 
-    /*
-    FP32 DUMP LDS
-    */
-    // if (threadIdx.x == 0) {
-    //     printf("lds_a: ");
-    //     for (int i = 0; i < 64; ++i) {
-    //         printf("%f ", float(lds_a.data[i]));
-    //     }
-    //     printf("\n");
-    // }
-
-    /*
-    FP32 DUMP REG
-    */
-    // if (threadIdx.x == 18) {
-        // printf("reg_a:\n");
-        // auto [a_tile0_0, a_tile0_1, a_tile0_2, a_tile0_3] = static_cast<float4>(reg_a.tiles[0][0].data[0]);
-        // printf("%f\n", a_tile0_0);
-        // printf("%f\n", a_tile0_1);
-        // printf("%f\n", a_tile0_2);
-        // printf("%f\n", a_tile0_3);
-        // auto [a_tile1_0, a_tile1_1, a_tile1_2, a_tile1_3] = static_cast<float4>(reg_a.tiles[0][0].data[1]);
-        // printf("%f\n", a_tile1_0);
-        // printf("%f\n", a_tile1_1);
-        // printf("%f\n", a_tile1_2);
-        // printf("%f\n", a_tile1_3);
-
-        // printf("reg_b:\n");
-        // auto [tile0_0, tile0_1, tile0_2, tile0_3] = static_cast<float4>(reg_b.tiles[0][0].data[0]);
-        // printf("%f\n", tile0_0);
-        // printf("%f\n", tile0_1);
-        // printf("%f\n", tile0_2);
-        // printf("%f\n", tile0_3);
-        // auto [tile1_0, tile1_1, tile1_2, tile1_3] = static_cast<float4>(reg_b.tiles[0][0].data[1]);
-        // printf("%f\n", tile1_0);
-        // printf("%f\n", tile1_1);
-        // printf("%f\n", tile1_2);
-        // printf("%f\n", tile1_3);
-
-    //     printf("reg_c:\n");
-    //     auto [res_0, res_1] = reg_c.tiles[0][0].data[0];
-    //     auto [res_2, res_3] = reg_c.tiles[0][0].data[1];
-    //     printf("%f\n", res_0);
-    //     printf("%f\n", res_1);
-    //     printf("%f\n", res_2);
-    //     printf("%f\n", res_3);
-    // }
+    store(C, reg_c, {warp_row, warp_col});
 }
 
 int main() {
-    constexpr int M = 48, N = 48, K = 32;
+    constexpr int M = 256, N = 256, K = 128;
     fp8e4m3* a, *b;
     float* c;
     hipMallocManaged((void**)(&a), sizeof(fp8e4m3) * M * K);
@@ -117,7 +76,7 @@ int main() {
     matmul_device<<<1, NUM_WARPS * kittens::WARP_THREADS, sizeof(fp8e4m3) * M * K * 2, nullptr>>>(GL_A, GL_B, GL_C);
     hipDeviceSynchronize();
 
-#if 0
+#if 1
     float c_ref[M * N];
     for (int m = 0; m < M; ++m) {
         for (int n = 0; n < N; ++n) {
@@ -128,19 +87,29 @@ int main() {
             c_ref[m * N + n] = acc;
         }
     }
-    auto print_f32_matrix = [&](const char* name, float* mat, int rows, int cols) {
-        printf("\n");
-        printf("%s:\n", name);
-        for (int i = 0; i < rows; i++) {
-            for (int j = 0; j < cols; j++) {
-                printf("%6.2f ", mat[i * cols + j]);
-            }
-            printf("\n");
+
+    int total = M * N;
+    float max_abs_diff = 0.0f;
+    float sum_abs_diff = 0.0f;
+    float max_rel_diff = 0.0f;
+    float sum_rel_diff = 0.0f;
+    for (int m = 0; m < M; ++m) {
+        for (int n = 0; n < N; ++n) {
+            float ref  = c_ref[m * N + n];
+            float got  = c[m * N + n];
+            float diff = fabsf(ref - got);
+            float rel  = (fabsf(ref) > 1e-5f) ? diff / fabsf(ref) : diff;
+
+            max_abs_diff  = fmaxf(max_abs_diff, diff);
+            sum_abs_diff += diff;
+            max_rel_diff  = fmaxf(max_rel_diff, rel);
+            sum_rel_diff += rel;
         }
-        printf("\n");
-    };
-    print_f32_matrix("C (CPU)", c_ref, M, N);
-    print_f32_matrix("C (GPU)", c, M, N);
+    }
+    printf("Max abs error:  %e\n", max_abs_diff);
+    printf("Mean abs error: %e\n", sum_abs_diff / total);
+    printf("Max rel error:  %e\n", max_rel_diff);
+    printf("Mean rel error: %e\n", sum_rel_diff / total);
 #endif
 
     hipFree(a); hipFree(b); hipFree(c);
