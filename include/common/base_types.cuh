@@ -10,11 +10,9 @@
 
 #pragma once
 
-#include <hip/hip_bf16.h>
-#include <hip/hip_fp16.h>
-#include <hip/hip_fp8.h>
-#include <hip/hip_fp8.h>
-#include <hip/hip_runtime.h>
+#include <hip_bf16.h>
+#include <hip_fp16.h>
+#include <hip_fp8.h>
 #include <string>
 #include <bit>
 
@@ -85,10 +83,10 @@ template<typename T> struct constants {
      */
     static __device__ inline constexpr T zero()      { return T{0}; }
     /**
-     * @brief Ones
-     * @return Constexpr ones with type T
+     * @brief One
+     * @return Constexpr one with type T
      */
-    static __device__ inline constexpr T ones()       { return T{1}; }
+    static __device__ inline constexpr T one()       { return T{1}; }
     /**
      * @brief Positive infinity. Particularly useful for initializing before a min op.
      * @return Constexpr positive infinity with type T
@@ -102,31 +100,31 @@ template<typename T> struct constants {
 };
 template<> struct constants<float2> {
     static __device__ inline constexpr float2 zero()      { return float2{0.f, 0.f}; }
-    static __device__ inline constexpr float2 ones()       { return float2{1.f, 1.f}; }
+    static __device__ inline constexpr float2 one()       { return float2{1.f, 1.f}; }
     static __device__ inline constexpr float2 pos_infty() { return float2{constants<float>::pos_infty(), constants<float>::pos_infty()}; }
     static __device__ inline constexpr float2 neg_infty() { return float2{constants<float>::neg_infty(), constants<float>::neg_infty()}; }
 };
 template<> struct constants<bf16> {
     static __device__ inline constexpr bf16 zero()      { return std::bit_cast<bf16>(uint16_t(0x0000)); } // unfortunately __float2bf16_rn is not constexpr
-    static __device__ inline constexpr bf16 ones()       { return std::bit_cast<bf16>(uint16_t(0x3F80)); }
+    static __device__ inline constexpr bf16 one()       { return std::bit_cast<bf16>(uint16_t(0x3F80)); }
     static __device__ inline constexpr bf16 pos_infty() { return std::bit_cast<bf16>(uint16_t(0x7F80)); }
     static __device__ inline constexpr bf16 neg_infty() { return std::bit_cast<bf16>(uint16_t(0xFF80)); }
 };
 template<> struct constants<bf16_2> {
     static __device__ inline bf16_2 zero()      { return bf16_2{constants<bf16>::zero(),      constants<bf16>::zero()};      }
-    static __device__ inline bf16_2 ones()       { return bf16_2{constants<bf16>::ones(),       constants<bf16>::ones()};       }
+    static __device__ inline bf16_2 one()       { return bf16_2{constants<bf16>::one(),       constants<bf16>::one()};       }
     static __device__ inline bf16_2 pos_infty() { return bf16_2{constants<bf16>::pos_infty(), constants<bf16>::pos_infty()}; }
     static __device__ inline bf16_2 neg_infty() { return bf16_2{constants<bf16>::neg_infty(), constants<bf16>::neg_infty()}; }
 };
 template<> struct constants<half> {
     static __device__ inline constexpr half zero()      { return std::bit_cast<half>(uint16_t(0x0000)); }
-    static __device__ inline constexpr half ones()       { return std::bit_cast<half>(uint16_t(0x3C00)); }
+    static __device__ inline constexpr half one()       { return std::bit_cast<half>(uint16_t(0x3C00)); }
     static __device__ inline constexpr half pos_infty() { return std::bit_cast<half>(uint16_t(0x7C00)); }
     static __device__ inline constexpr half neg_infty() { return std::bit_cast<half>(uint16_t(0xFC00)); }
 };
 template<> struct constants<half_2> {
     static __device__ inline constexpr half_2 zero()      { return std::bit_cast<half_2>(uint32_t(0x00000000)); }
-    static __device__ inline constexpr half_2 ones()       { return std::bit_cast<half_2>(uint32_t(0x3C003C00)); }
+    static __device__ inline constexpr half_2 one()       { return std::bit_cast<half_2>(uint32_t(0x3C003C00)); }
     static __device__ inline constexpr half_2 pos_infty() { return std::bit_cast<half_2>(uint32_t(0x7C007C00)); }
     static __device__ inline constexpr half_2 neg_infty() { return std::bit_cast<half_2>(uint32_t(0xFC00FC00)); }
 };
@@ -144,11 +142,11 @@ template<> struct constants<fp8e4m3_4> {
 };
 template<> struct constants<int> {
     static __device__ inline constexpr int zero()      { return 0; }
-    static __device__ inline constexpr int ones()       { return 1; }
+    static __device__ inline constexpr int one()       { return 1; }
 };
 template<> struct constants<int2> {
     static __device__ inline constexpr int2 zero()      { return int2{0, 0}; }
-    static __device__ inline constexpr int2 ones()       { return int2{1, 1}; }
+    static __device__ inline constexpr int2 one()       { return int2{1, 1}; }
 };
 
 /**
@@ -172,72 +170,72 @@ template<typename T> struct packing {
     static __device__ inline constexpr T pack(const auto &i);
 };
 template<> struct packing<bf16> {
-    static __host__ __device__ inline constexpr int num() { return 1; }
+    static __device__ inline constexpr int num() { return 1; }
     using unpacked_type = bf16;
     using packed_type = bf16_2;
     static __device__ inline bf16_2 pack(const bf16 &i) { return bf16_2{i, i}; }
 };
 template<> struct packing<bf16_2> {
-    static __host__ __device__ inline constexpr int num() { return 2; }
+    static __device__ inline constexpr int num() { return 2; }
     using unpacked_type = bf16;
     using packed_type = bf16_2;
     static __device__ inline bf16_2 pack(const bf16 &i) { return bf16_2{i, i}; } // this replication makes code cleaner later.
 };
 template<> struct packing<half> {
-    static __host__ __device__ inline constexpr int num() { return 1; }
+    static __device__ inline constexpr int num() { return 1; }
     using unpacked_type = half;
     using packed_type = half_2;
-    static __device__ inline constexpr half_2 pack(const half &i) { return half_2{i, i}; }
+    static __device__ inline constexpr half_2 pack(const half &i) { return std::bit_cast<half_2>(static_cast<uint32_t>(i) << 16 | static_cast<uint32_t>(i)); }
 };
 template<> struct packing<half_2> {
-    static __host__ __device__ inline constexpr int num() { return 2; }
+    static __device__ inline constexpr int num() { return 2; }
     using unpacked_type = half;
     using packed_type = half_2;
-    static __device__ inline constexpr half_2 pack(const half &i) { return half_2{i, i}; } // this replication makes code cleaner later.
+    static __device__ inline constexpr half_2 pack(const half &i) { return std::bit_cast<half_2>(static_cast<uint32_t>(i) << 16 | static_cast<uint32_t>(i)); } // this replication makes code cleaner later.
 };
 template<> struct packing<float> {
-    static __host__ __device__ inline constexpr int num() { return 1; }
+    static __device__ inline constexpr int num() { return 1; }
     using unpacked_type = float;
     using packed_type = float2;
     static __device__ inline constexpr float2 pack(const float &i) { return float2{i, i}; }
 };
 template<> struct packing<float2> {
-    static __host__ __device__ inline constexpr int num() { return 2; }
+    static __device__ inline constexpr int num() { return 2; }
     using unpacked_type = float;
     using packed_type = float2;
     static __device__ inline constexpr float2 pack(const float &i) { return float2{i, i}; } // this replication makes code cleaner later.
 };
 template<> struct packing<int> {
-    static __host__ __device__ inline constexpr int num() { return 1; }
+    static __device__ inline constexpr int num() { return 1; }
     using unpacked_type = int;
     using packed_type = int2;
     static __device__ inline constexpr int2 pack(const int &i) { return int2{i, i}; } // this replication makes code cleaner later.
 };
 template<> struct packing<int2> {
-    static __host__ __device__ inline constexpr int num() { return 2; }
+    static __device__ inline constexpr int num() { return 2; }
     using unpacked_type = int;
     using packed_type = int2;
     static __device__ inline constexpr int2 pack(const int &i) { return int2{i, i}; } // this replication makes code cleaner later.
 };
 template<> struct packing<float4> {
-    static __host__ __device__ inline constexpr int num() { return 4; }
+    static __device__ inline constexpr int num() { return 4; }
 };
 template<> struct packing<int4> {
-    static __host__ __device__ inline constexpr int num() { return 4; }
+    static __device__ inline constexpr int num() { return 4; }
 };
 template<> struct packing<fp8e4m3> {
-    static __host__ __device__ inline constexpr int num() { return 1; }
+    static __device__ inline constexpr int num() { return 1; }
     using unpacked_type = fp8e4m3;
     using packed_type = fp8e4m3_4;
 };
 template<> struct packing<fp8e4m3_4> {
-    static __host__ __device__ inline constexpr int num() { return 4; }
+    static __device__ inline constexpr int num() { return 4; }
     using unpacked_type = fp8e4m3;
     using packed_type = fp8e4m3_4;
 };
 
 /**
- * @brief Pack four float8 into 32-bits (HIP doesn't provide such a constructor).
+ * @brief Pack four float8 into 32-bits.
  */
 static __host__ __device__ inline fp8e4m3_4 make_fp8e4m3_4(const fp8e4m3 & x, const fp8e4m3 & y, const fp8e4m3 & z, const fp8e4m3 & w) {
     return std::bit_cast<fp8e4m3_4>(
@@ -295,14 +293,21 @@ template<> struct convertor<float2, bf16_2> {
 
 template<> struct convertor<bf16_2, float2> {
     static __host__ __device__ inline bf16_2 convert(const float2 &u) {
-        uint32_t result;
-        asm volatile("v_cvt_pk_bf16_f32 %0, %1, %2" 
-                     : "=v"(result) 
-                     : "v"(u.x), "v"(u.y));
-        return *reinterpret_cast<bf16_2*>(&result);
+        return bf16_2{
+            std::bit_cast<bf16>(static_cast<uint16_t>(std::bit_cast<uint32_t>(u.x) >> 16)),
+            std::bit_cast<bf16>(static_cast<uint16_t>(std::bit_cast<uint32_t>(u.y) >> 16))
+        };
     }
 };
-
+// template<> struct convertor<bf16_2, float2> {
+//     static __host__ __device__ inline bf16_2 convert(const float2 &u) {
+//         uint32_t result;
+//         asm volatile("v_cvt_pk_bf16_f32 %0, %1, %2" 
+//                      : "=v"(result) 
+//                      : "v"(u.x), "v"(u.y));
+//         return *reinterpret_cast<bf16_2*>(&result);
+//     }
+// };
 
 template<> struct convertor<float, half> {
     static __host__ __device__ inline float convert(const half & u) {
