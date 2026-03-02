@@ -160,7 +160,7 @@ template<typename T> struct packing {
      *
      * @return constexpr int representing number of elements within the type.
      */
-    static __host__ __device__ inline constexpr int num() { return 1; }
+    static __device__ inline constexpr int num() { return 1; }
     /**
      * @brief Packs a single T element twice (replicated) into its packed type.
      *
@@ -290,7 +290,6 @@ template<> struct convertor<float2, bf16_2> {
         return 	__bfloat1622float2(u);
     }
 };
-
 template<> struct convertor<bf16_2, float2> {
     static __host__ __device__ inline bf16_2 convert(const float2 &u) {
         return bf16_2{
@@ -308,6 +307,7 @@ template<> struct convertor<bf16_2, float2> {
 //         return *reinterpret_cast<bf16_2*>(&result);
 //     }
 // };
+
 
 template<> struct convertor<float, half> {
     static __host__ __device__ inline float convert(const half & u) {
