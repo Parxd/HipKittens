@@ -12,7 +12,7 @@
 
 using namespace kittens;
 
-#define NUM_WARPS 4
+#define NUM_WARPS 2
 #define BLOCK_M 256
 #define BLOCK_N 256
 #define BLOCK_K 128
@@ -52,28 +52,40 @@ void matmul_device(const _gl A, const _gl B, _gl_c C) {
 
     // store(C, reg_c, {warp_row, warp_col});
 
-    auto (&lds) = al.allocate<st<fp8e4m3, 256, 128, ducks::st_layout::row>>();
-    constexpr auto reg_buffer_sz = (256 * 128) / (NUM_WARPS * kittens::WARP_THREADS) / (sizeof(float4) / sizeof(fp8e4m3));
+    auto (&lds) = al.allocate<st<fp8e4m3, 64, 64, ducks::st_layout::row>>();
+    constexpr auto reg_buffer_sz = (64 * 64) / (NUM_WARPS * WARP_THREADS) / (sizeof(float4) / sizeof(fp8e4m3));
     float4 reg_buffer[reg_buffer_sz];
-    load_global_to_register_buffer(reg_buffer, reg_buffer_sz, A, {0, 0}, lds);
+    load_global_to_register_buffer<2, false, NUM_WARPS * WARP_THREADS>(reg_buffer, reg_buffer_sz, A, {0, 0}, lds);
+    asm volatile("s_waitcnt vmcnt(0)");
     __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
     store_register_buffer_to_shared(lds, reg_buffer);
-    __builtin_amdgcn_s_barrier();
     asm volatile("s_waitcnt lgkmcnt(0)");
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
 
     if (threadIdx.x == 0) {
         printf("LDS: \n");
-        for (int i = 0; i < 256 * 128; ++i) {
+        for (int i = 0; i < 64 * 64; ++i) {
             if (float(lds.data[i]) - 1.00000f > 0.00001) {
                 printf("%i, %f\n", i, float(lds.data[i]));
             }
         }
         printf("\n");
     }
+    // for (int i = 0; i < reg_buffer_sz; ++i) {
+    //     fp8e4m3* bytes = reinterpret_cast<fp8e4m3*>(&reg_buffer[i]);
+    //     for (int j = 0; j < 16; ++j) {
+    //         // if (float(bytes[j]) - 1.0000f > 0.0001f) {
+    //             printf("lane %i byte %i: %f\n", threadIdx.x, j, float(bytes[j]));
+    //         // }
+    //     }
+    // }
 }
 
 int main() {
-    constexpr int M = 256, N = 256, K = 128;
+    constexpr int M = 64, N = 256, K = 64;
     fp8e4m3* a, *b;
     float* c;
     hipMallocManaged((void**)(&a), sizeof(fp8e4m3) * M * K);
@@ -91,7 +103,7 @@ int main() {
         val += 0.0625;
     }
 
-    _gl   GL_A(a, 1, 1, K, M);
+    _gl   GL_A(a, 1, 1, M, K);
     _gl   GL_B(b, 1, 1, K, N);
     _gl_c GL_C(c, 1, 1, M, N);
     matmul_device<<<1, NUM_WARPS * kittens::WARP_THREADS, sizeof(fp8e4m3) * M * K * 2, nullptr>>>(GL_A, GL_B, GL_C);
