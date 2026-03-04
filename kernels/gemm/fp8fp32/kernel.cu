@@ -12,12 +12,12 @@
 
 using namespace kittens;
 
-#define NUM_WARPS 2
+#define NUM_WARPS 8
 #define BLOCK_M 256
 #define BLOCK_N 256
 #define BLOCK_K 128
 #define REG_MN 128
-#define REG_K 64
+#define REG_MN 64
 
 using G = kittens::group<NUM_WARPS>;
 using _gl = gl<fp8e4m3,-1,-1,-1,-1>;
@@ -28,85 +28,36 @@ void matmul_device(const _gl A, const _gl B, _gl_c C) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
 
-    // auto (&lds_a) = al.allocate<st<fp8e4m3, 128, 256, ducks::st_layout::col>>();
-    // auto (&lds_b) = al.allocate<st<fp8e4m3, 128, 256, ducks::st_layout::col>>();
-    // rt<fp8e4m3, 128, 64, ducks::rt_layout::col> reg_a;
-    // rt<fp8e4m3, 128, 64, ducks::rt_layout::col> reg_b;
-    // rt<float,   64, 64, ducks::rt_layout::col> reg_c;
-    // zero(reg_c);
+    auto (&lds_a) = al.allocate<st<fp8e4m3, BLOCK_M, BLOCK_K>>();
+    auto (&lds_b) = al.allocate<st<fp8e4m3, BLOCK_N, BLOCK_K>>();
+    rt<fp8e4m3, REG_MN, REG_MN> tiles[1];
 
-    // G::load(lds_a, A, {0, 0, 0, 0});
-    // G::load(lds_b, B, {0, 0, 0, 0});
-    // __builtin_amdgcn_s_barrier();
-
-    // auto warp_id = warpid();
-    // auto warp_row = warp_id / 4, warp_col = warp_id % 4;
-    // load(reg_a, subtile_inplace<128, 64>(lds_a, {0, warp_row}));
-    // load(reg_b, subtile_inplace<128, 64>(lds_b, {0, warp_col}));
-
-    // asm volatile("s_waitcnt lgkmcnt(0)");
-    // __builtin_amdgcn_s_barrier();
-    // mma_AtB(reg_c, reg_a, reg_b, reg_c);
-    // __builtin_amdgcn_s_barrier();
-    // __builtin_amdgcn_sched_barrier(0);
-
-    // store(C, reg_c, {warp_row, warp_col});
-
-    auto (&lds) = al.allocate<st<fp8e4m3, 64, 64, ducks::st_layout::row>>();
-    constexpr auto reg_buffer_sz = (64 * 64) / (NUM_WARPS * WARP_THREADS) / (sizeof(float4) / sizeof(fp8e4m3));
-    float4 reg_buffer[reg_buffer_sz];
-    load_global_to_register_buffer<2, false, NUM_WARPS * WARP_THREADS>(reg_buffer, reg_buffer_sz, A, {0, 0}, lds);
-    asm volatile("s_waitcnt vmcnt(0)");
-    __builtin_amdgcn_s_barrier();
-    __builtin_amdgcn_sched_barrier(0);
-
-    store_register_buffer_to_shared(lds, reg_buffer);
-    asm volatile("s_waitcnt lgkmcnt(0)");
-    __builtin_amdgcn_s_barrier();
-    __builtin_amdgcn_sched_barrier(0);
-
-    if (threadIdx.x == 0) {
-        printf("LDS: \n");
-        for (int i = 0; i < 64 * 64; ++i) {
-            if (float(lds.data[i]) - 1.00000f > 0.00001) {
-                printf("%i, %f\n", i, float(lds.data[i]));
-            }
-        }
-        printf("\n");
-    }
-    // for (int i = 0; i < reg_buffer_sz; ++i) {
-    //     fp8e4m3* bytes = reinterpret_cast<fp8e4m3*>(&reg_buffer[i]);
-    //     for (int j = 0; j < 16; ++j) {
-    //         // if (float(bytes[j]) - 1.0000f > 0.0001f) {
-    //             printf("lane %i byte %i: %f\n", threadIdx.x, j, float(bytes[j]));
-    //         // }
-    //     }
-    // }
+    const int k_iter = A.cols() / BLOCK_K;
 }
 
 int main() {
-    constexpr int M = 64, N = 256, K = 64;
+    int M = 8192, N = 8192, K = 8192;
     fp8e4m3* a, *b;
     float* c;
     hipMallocManaged((void**)(&a), sizeof(fp8e4m3) * M * K);
     hipMallocManaged((void**)(&b), sizeof(fp8e4m3) * N * K);
     hipMallocManaged((void**)(&c), sizeof(float) * M * N);
 
-    // std::mt19937 gen(1);
-    // std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
-    // for (int i = 0; i < M * K; i++) { a[i] = base_types::convertor<fp8e4m3, float>::convert(dis(gen)); }
-    // for (int i = 0; i < N * K; i++) { b[i] = base_types::convertor<fp8e4m3, float>::convert(dis(gen)); }
+    std::mt19937 gen(1);
+    std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
+    for (int i = 0; i < M * K; i++) { a[i] = base_types::convertor<fp8e4m3, float>::convert(dis(gen)); }
+    for (int i = 0; i < N * K; i++) { b[i] = base_types::convertor<fp8e4m3, float>::convert(dis(gen)); }
     float val = 0.0;
-    for (int i = 0; i < M * K; ++i) {
-        a[i] = base_types::convertor<fp8e4m3, float>::convert(1);
-        b[i] = base_types::convertor<fp8e4m3, float>::convert(1);
-        val += 0.0625;
-    }
+    // for (int i = 0; i < M * K; ++i) {
+    //     a[i] = base_types::convertor<fp8e4m3, float>::convert(1);
+    //     b[i] = base_types::convertor<fp8e4m3, float>::convert(1);
+    //     val += 0.0625;
+    // }
 
     _gl   GL_A(a, 1, 1, M, K);
-    _gl   GL_B(b, 1, 1, K, N);
+    _gl   GL_B(b, 1, 1, N, K);
     _gl_c GL_C(c, 1, 1, M, N);
-    matmul_device<<<1, NUM_WARPS * kittens::WARP_THREADS, sizeof(fp8e4m3) * M * K * 2, nullptr>>>(GL_A, GL_B, GL_C);
+    matmul_device<<<1, NUM_WARPS * kittens::WARP_THREADS, sizeof(fp8e4m3) * (M * K) + (K * N), nullptr>>>(GL_A, GL_B, GL_C);
     hipDeviceSynchronize();
 
 #if 0
