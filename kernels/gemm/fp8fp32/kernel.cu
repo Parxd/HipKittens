@@ -5,14 +5,14 @@
 #include "common/base_types.cuh"
 #include "common/util.cuh"
 #include "kittens.cuh" 
-#include "ops/warp/register/tile/conversions.cuh"
+#include "ops/warp/memory/tile/global_to_shared.cuh"
 
 using namespace kittens;
 
 #define NUM_WARPS 8
 #define BLOCK_M 256
 #define BLOCK_N 256
-#define BLOCK_K 64
+#define BLOCK_K 128
 #define REG_MN   64
 #define REG_K    32
 
@@ -28,10 +28,10 @@ void matmul_device(const _gl A, const _gl B, _gl_c C) {
 
     auto (&As) = al.allocate<st<fp8e4m3, BLOCK_M, BLOCK_K>>();
     auto (&Bs) = al.allocate<st<fp8e4m3, BLOCK_N, BLOCK_K>>();
-    rt<fp8e4m3, REG_MN, REG_K> tiles[6];
+    rt<fp8e4m3, REG_MN, REG_K> tiles[8];
     rt_fl<REG_MN, REG_MN, ducks::rt_layout::col> C_accum[2];
     for (int i = 0; i < 2; i++) { zero(C_accum[i]); }
-
+    
     const int warp_id = warpid();
     const int output_m = blockIdx.y, output_n = blockIdx.x;  // TODO: use cache-aware assignments
     const int warp_row = warp_id / 4, warp_col = warp_id % 4;
@@ -41,50 +41,151 @@ void matmul_device(const _gl A, const _gl B, _gl_c C) {
     G::load(Bs, B, {0, 0, output_n, 0});
     __builtin_amdgcn_s_barrier();
 
-    // if (warp_row == 1) {
-    //     __builtin_amdgcn_s_barrier();
-    // }
+    if (warp_row == 1) {
+        __builtin_amdgcn_s_barrier();
+    }
 
-    for (int K_TILE = 0; K_TILE < k_iters; ++K_TILE) {
-        // constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K) / NUM_THREADS / sizeof(float4) / sizeof(fp8e4m3);
-        // constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K) / NUM_THREADS / sizeof(float4) / sizeof(fp8e4m3);
-        // float4 a_buffer_next[BUFFER_SIZE_A];
-        // float4 b_buffer_next[BUFFER_SIZE_A];
-        // load_global_to_register_buffer<2, false, NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, A, {0, 0, output_m, K_TILE + 1}, As);
-        // load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, B, {0, 0, output_n, K_TILE + 1}, Bs);
+    for (int K_TILE = 0; K_TILE < k_iters - 1; ++K_TILE) {
+        constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K) / NUM_THREADS / sizeof(float4) / sizeof(fp8e4m3);
+        constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K) / NUM_THREADS / sizeof(float4) / sizeof(fp8e4m3);
+        float4 a_buffer_next[BUFFER_SIZE_A];
+        float4 b_buffer_next[BUFFER_SIZE_B];
 
-        load(tiles[0], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 0}));
-        load(tiles[2], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 1}));
-        load(tiles[1], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 0}));
-        load(tiles[3], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 1}));
-        load(tiles[4], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 0}));
-        load(tiles[5], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 1}));
+        // Cluster 0
+        load_global_to_register_buffer<2, false, NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, A, {0, 0, output_m, K_TILE + 1}, As);
+        load(tiles[1], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 0}));
+        load(tiles[2], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 0}));
+        load(tiles[0], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 0}));
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
+        // Cluster 1
         asm volatile("s_waitcnt lgkmcnt(0)");
-        mma_ABt(C_accum[0], tiles[0], tiles[4], C_accum[0]);
-        mma_ABt(C_accum[0], tiles[2], tiles[5], C_accum[0]);
+        __builtin_amdgcn_s_setprio(1);
+        mma_ABt(C_accum[0], tiles[1], tiles[0], C_accum[0]);
+        mma_ABt(C_accum[1], tiles[2], tiles[0], C_accum[1]);
+        __builtin_amdgcn_s_setprio(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
 
-        mma_ABt(C_accum[1], tiles[1], tiles[4], C_accum[1]);
-        mma_ABt(C_accum[1], tiles[3], tiles[5], C_accum[1]);
+        // Cluster 2
+        load(tiles[3], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 1}));
+        load(tiles[4], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 1}));
+        load(tiles[5], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 1}));
+        load(tiles[0], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 2}));
+        load(tiles[1], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 2}));
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
 
+        // Cluster 3
+        asm volatile("s_waitcnt lgkmcnt(0)");
+        __builtin_amdgcn_s_setprio(1);
+        mma_ABt(C_accum[0], tiles[4], tiles[3], C_accum[0]);
+        mma_ABt(C_accum[1], tiles[5], tiles[3], C_accum[1]);
+        __builtin_amdgcn_s_setprio(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
+        // Cluster 4
+        load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, B, {0, 0, output_n, K_TILE + 1}, Bs);
+        load(tiles[2], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 2}));
+        load(tiles[6], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 3}));
+        load(tiles[7], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 3}));
+        load(tiles[5], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 3}));
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
+        // Cluster 5
+        __builtin_amdgcn_s_setprio(1);
+        mma_ABt(C_accum[0], tiles[1], tiles[0], C_accum[0]);
+        mma_ABt(C_accum[1], tiles[2], tiles[0], C_accum[1]);
+        __builtin_amdgcn_s_setprio(0);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
+        // Cluster 6
+        asm volatile("s_waitcnt lgkmcnt(0)");
+        store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
+        store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
+        // Cluster 7
+        __builtin_amdgcn_s_setprio(1);
+        mma_ABt(C_accum[0], tiles[7], tiles[6], C_accum[0]);
+        mma_ABt(C_accum[1], tiles[5], tiles[6], C_accum[1]);
         __builtin_amdgcn_s_setprio(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
     }
-    store(C, C_accum[0], {0, 0, warp_row, warp_col});
-    store(C, C_accum[1], {0, 0, warp_row + 2, warp_col});
+    // epilogue
+    __builtin_amdgcn_sched_barrier(0);
+    load(tiles[0], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 0}));
+    load(tiles[1], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 0}));
+    load(tiles[2], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 0}));
+    asm volatile("s_waitcnt lgkmcnt(0)");
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    __builtin_amdgcn_s_setprio(1);
+    mma_ABt(C_accum[0], tiles[1], tiles[0], C_accum[0]);
+    mma_ABt(C_accum[1], tiles[2], tiles[0], C_accum[1]);
+    __builtin_amdgcn_s_setprio(0);
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    load(tiles[3], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 1}));
+    load(tiles[4], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 1}));
+    load(tiles[5], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 1}));
+    asm volatile("s_waitcnt lgkmcnt(0)");
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    __builtin_amdgcn_s_setprio(1);
+    mma_ABt(C_accum[0], tiles[4], tiles[3], C_accum[0]);
+    mma_ABt(C_accum[1], tiles[5], tiles[3], C_accum[1]);
+    __builtin_amdgcn_s_setprio(0);
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    load(tiles[0], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 2}));
+    load(tiles[1], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 2}));
+    load(tiles[2], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 2}));
+    load(tiles[3], subtile_inplace<REG_MN, REG_K>(Bs, {warp_col, 3}));
+    load(tiles[4], subtile_inplace<REG_MN, REG_K>(As, {warp_row, 3}));
+    load(tiles[5], subtile_inplace<REG_MN, REG_K>(As, {warp_row + 2, 3}));
+    asm volatile("s_waitcnt lgkmcnt(0)");
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    __builtin_amdgcn_s_setprio(1);
+    mma_ABt(C_accum[0], tiles[1], tiles[0], C_accum[0]);
+    mma_ABt(C_accum[1], tiles[2], tiles[0], C_accum[1]);
+    __builtin_amdgcn_s_setprio(0);
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    __builtin_amdgcn_s_setprio(1);
+    mma_ABt(C_accum[0], tiles[4], tiles[3], C_accum[0]);
+    mma_ABt(C_accum[1], tiles[5], tiles[3], C_accum[1]);
+    __builtin_amdgcn_s_setprio(0);
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);
+
+    if (warp_row == 0) {
+        __builtin_amdgcn_s_barrier();
+    }
+    store(C, C_accum[0], {0, 0, output_m * 4 + warp_row,     output_n * 4 + warp_col});
+    store(C, C_accum[1], {0, 0, output_m * 4 + warp_row + 2, output_n * 4 + warp_col});
 }
 
 int main() {
-    const int M = 256, N = 256, K = 64;
+    const int M = 8192, N = 8192, K = 8192;
     fp8e4m3* a, *b;
     float* c;
-    hipMallocManaged((void**)(&a), sizeof(fp8e4m3) * M * K);
-    hipMallocManaged((void**)(&b), sizeof(fp8e4m3) * N * K);
-    hipMallocManaged((void**)(&c), sizeof(float) * M * N);
-
+    hipMalloc(&a, sizeof(fp8e4m3) * M * K);
+    hipMalloc(&b, sizeof(fp8e4m3) * N * K);
+    hipMalloc(&c, sizeof(float) * M * N);
     auto host_a = new fp8e4m3[M * K];
     auto host_b = new fp8e4m3[N * K];
 
@@ -92,14 +193,14 @@ int main() {
     std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
     for (int i = 0; i < M * K; i++) {
         float val = dis(gen);
-        a[i]      = base_types::convertor<fp8e4m3, float>::convert(val);
         host_a[i] = base_types::convertor<fp8e4m3, float>::convert(val);
     }
     for (int i = 0; i < N * K; i++) {
         float val = dis(gen);
-        b[i]      = base_types::convertor<fp8e4m3, float>::convert(val);
         host_b[i] = base_types::convertor<fp8e4m3, float>::convert(val);
     }
+    hipMemcpy(a, host_a, sizeof(fp8e4m3) * M * K, hipMemcpyHostToDevice);
+    hipMemcpy(b, host_b, sizeof(fp8e4m3) * N * K, hipMemcpyHostToDevice);
 
     _gl   GL_A(a, 1, 1, M, K);
     _gl   GL_B(b, 1, 1, N, K);
@@ -110,9 +211,10 @@ int main() {
     printf("launch err?: %s\n", hipGetErrorString(err));
     hipDeviceSynchronize();
 
-#if 1
+#if 0
     auto host_c = new float[M * N];
 
+    #pragma omp parallel for collapse(2)
     for (int m = 0; m < M; ++m) {
         for (int n = 0; n < N; ++n) {
             float acc = 0.0f;
@@ -150,11 +252,42 @@ int main() {
     printf("ref[1]=%f got[1]=%f\n", host_c[1], c[1]);
     printf("ref[256]=%f got[256]=%f\n", host_c[256], c[256]);
 
-    int zeros = 0;
-    for (int i = 0; i < M * N; i++)
-        if (host_c[i] == 0.0f) zeros++;
-    printf("zero count: %d / %d\n", zeros, M*N);
     delete[] host_c;
+#endif
+
+#if 1
+    hipEvent_t start, stop;
+    hipEventCreate(&start);
+    hipEventCreate(&stop);
+
+    const int ITERS = 20;
+    float times[ITERS];
+
+    for (int i = 0; i < ITERS; i++) {
+        hipEventRecord(start);
+        matmul_device<<<gridDim, NUM_WARPS * WARP_THREADS, sizeof(fp8e4m3) * (BLOCK_M * BLOCK_K) + (BLOCK_K * BLOCK_N), nullptr>>>(GL_A, GL_B, GL_C);
+        hipEventRecord(stop);
+        hipEventSynchronize(stop);
+        hipEventElapsedTime(&times[i], start, stop);
+    }
+
+    double flops = 2.0 * M * N * K;
+    float mean = 0;
+    for (int i = 0; i < ITERS; i++) mean += times[i];
+    mean /= ITERS;
+
+    float var = 0;
+    for (int i = 0; i < ITERS; i++) var += (times[i] - mean) * (times[i] - mean);
+    var /= ITERS;
+    float stddev = sqrtf(var);
+
+    printf("Mean time: %.3f ms  Stddev: %.3f ms\n", mean, stddev);
+    printf("Mean TFLOP/s: %.2f  Stddev: %.2f\n",
+        flops / (mean / 1000.0) / 1e12,
+        flops / (mean / 1000.0) / 1e12 * (stddev / mean));
+
+    hipEventDestroy(start);
+    hipEventDestroy(stop);
 #endif
 
     hipFree(a); hipFree(b); hipFree(c);
