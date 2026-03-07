@@ -21,7 +21,7 @@
   * @param idx[in] The index of the tile to load data from.
   */
  
- template<int axis, int elem_offset, ducks::art::all RT, ducks::gl::all GL, ducks::coord::tile COORD=coord<RT>>
+ template<int axis, int elem_offset=0, ducks::art::all RT, ducks::gl::all GL, ducks::coord::tile COORD=coord<RT>>
  __device__ inline static void load(RT &dst, const GL &src, const COORD &idx, const COORD &warp_idx) {
      using T2 = RT::dtype;
      constexpr int packing = base_types::packing<typename RT::dtype>::num();
@@ -45,32 +45,19 @@
      int thr_offset = (row_offset * row_stride + col_offset + warp_offset) * sizeof(U);
  
      // Compile-time loop to load data into the tile
-     auto perform_load_at = [&]<int N, int M, int K, int k_row_offset>() {
+     auto perform_load_at = [&]<int N, int M, int K>() {
          using tile_range = ducks::art::get_nth_range_t<typename RT::register_ranges, N * RT::width + M>;
          const int register_offset = K * RT::registers_per_stride;
 
          constexpr int col = RT::base_tile_cols*M + K * RT::base_tile_elements_per_stride_group;
          constexpr int row = RT::base_tile_rows*N;
+         const int k_row_offset = row * row_stride * sizeof(U);
  
          constexpr int stride_in_bytes = RT::base_tile_stride * sizeof(U);
          constexpr int offset_in_bytes = (elem_offset + col) * sizeof(U);
          constexpr int start_gpr = tile_range::lo + register_offset;
 
-         if constexpr ((offset_in_bytes + k_row_offset) <= macros::max_mubuf_inst_offset()) {
-            if constexpr (stride_in_bytes == (sizeof(int32_t) * 4)) {
-                macros::buffer_load_dwordx4<start_gpr>(br, thr_offset, 0, offset_in_bytes + k_row_offset);
-            }
-            else if constexpr (stride_in_bytes == (sizeof(int32_t) * 2)) {
-                macros::buffer_load_dwordx2<start_gpr>(br, thr_offset, 0, offset_in_bytes + k_row_offset);
-            }
-            else if constexpr (stride_in_bytes == sizeof(int32_t)) {
-                macros::buffer_load_dword<start_gpr>(br, thr_offset, 0, offset_in_bytes + k_row_offset);
-            }
-            else {
-                static_assert(false, "Encounter unsupported format in ops/warp/memory/tile/assembly/global_to_register.cuh\n");
-            }
-         }
-         else if constexpr (offset_in_bytes <= macros::max_mubuf_inst_offset()) {
+         if constexpr (offset_in_bytes <= macros::max_mubuf_inst_offset()) {
             if constexpr (stride_in_bytes == (sizeof(int32_t) * 4)) {
                 macros::buffer_load_dwordx4<start_gpr>(br, thr_offset + k_row_offset, 0, offset_in_bytes);
             }
@@ -79,20 +66,6 @@
             }
             else if constexpr (stride_in_bytes == sizeof(int32_t)) {
                 macros::buffer_load_dword<start_gpr>(br, thr_offset + k_row_offset, 0, offset_in_bytes);
-            }
-            else {
-                static_assert(false, "Encounter unsupported format in ops/warp/memory/tile/assembly/global_to_register.cuh\n");
-            }
-         }
-         else if constexpr (k_row_offset <= macros::max_mubuf_inst_offset()) {
-            if constexpr (stride_in_bytes == (sizeof(int32_t) * 4)) {
-                macros::buffer_load_dwordx4<start_gpr>(br, thr_offset + offset_in_bytes, 0, k_row_offset);
-            }
-            else if constexpr (stride_in_bytes == (sizeof(int32_t) * 2)) {
-                macros::buffer_load_dwordx2<start_gpr>(br, thr_offset + offset_in_bytes, 0, k_row_offset);
-            }
-            else if constexpr (stride_in_bytes == sizeof(int32_t)) {
-                macros::buffer_load_dword<start_gpr>(br, thr_offset + offset_in_bytes, 0, k_row_offset);
             }
             else {
                 static_assert(false, "Encounter unsupported format in ops/warp/memory/tile/assembly/global_to_register.cuh\n");
@@ -116,12 +89,11 @@
  
      [&]<std::size_t... Ns>(std::index_sequence<Ns...>) {
          ([&]<std::size_t N>() {
-             constexpr int k_row_offset = RT::base_tile_rows * N * sizeof(U);
              [&]<std::size_t... Ms>(std::index_sequence<Ms...>) {
                  ([&]<std::size_t M>() {
                      [&]<std::size_t... Ks>(std::index_sequence<Ks...>) {
                          ([&]<std::size_t K>() {
-                             perform_load_at.template operator()<N, M, K, k_row_offset>();
+                             perform_load_at.template operator()<N, M, K>();
                          }.template operator()<Ks>(), ...);
                      }(std::make_index_sequence<RT::base_tile_num_strides>{});
                  }.template operator()<Ms>(), ...);
