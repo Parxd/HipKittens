@@ -15,8 +15,10 @@ constexpr int D_EXPERT = 512;
 constexpr int BLOCK_M = 32;
 constexpr int BLOCK_N = 256;
 constexpr int BLOCK_K = 256;
-constexpr int REG_MN = 16;
+constexpr int REG_M = 16;
+constexpr int REG_N = 64;
 constexpr int REG_K = 32;
+constexpr int WEIGHT_SWIZZLE_GRANULARITY = BLOCK_N / 2;
 
 using _gl_A = gl<fp8e4m3,1,1,-1,-1>;
 using _gl_B = gl<fp8e4m3,1,-1,-1,-1>;
@@ -39,6 +41,11 @@ struct micro_globals {
 
 __global__ __launch_bounds__(NUM_WARPS * WARP_THREADS, 2)
 void kernel(const micro_globals g) {
+    extern __shared__ alignment_dummy __shm[];
+    shared_allocator al((int*)&__shm[0]);
+    
+    rt_fl<REG_M, REG_N, ducks::rt_layout::col> accum[2];
+
     // TODO: add tile swizzling--stack intra-XCD SMs along intra-expert M-tiles first
     const int total_tiles = g.num_valid_tiles * (D_EXPERT / BLOCK_N);
     for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
