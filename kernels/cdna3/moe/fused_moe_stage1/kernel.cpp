@@ -38,14 +38,13 @@ using _gl_meta = gl<int,1,1,1,-1>;
  * @param dst[out]  The destination shared tile.
  * @param src[in]   The source global tensor (unpermuted activations), shape [M, d_hidden].
  * @param idx[in]   Tile coordinate (m_tile, k_tile): m_tile is the M-tile index into the
- *                   permuted row space; k_tile is the column-block index into src's actual K axis.
- * @param token_mapping[in]  Array mapping each absolute permuted-space row index to its
- *                   corresponding row index in src. Only reads indices [m_tile * BLOCK_M, end_idx).
- * @param end_idx[in]  Absolute row index in permuted space up to which rows in this
- *                   M-tile are valid / non-padding.
+ *                  PERMUTED row space; k_tile is the column-block index into src's actual K axis.
+ * @param sorted_token_ids[in]  Array mapping each permuted-space row index to its
+ *                              corresponding bit-packed int, which encodes the token index in 
+ *                              src. in the lower 24-bits, and its top-K slot in the upper 8.
+ *                              Only reads indices [m_tile * BLOCK_M, m_tile * 2 * BLOCK_M).
  */
 template
-    int axis,
     int N_THREADS,
     ducks::st::all ST,
     ducks::gl::all GL,
@@ -53,9 +52,11 @@ template
     ducks::coord::tile COORD = coord<ST>
 >
 __device__ inline void gather_load(
-    ST& dst, const GL& src, const COORD& idx, const GL_IDX& token_mapping, int end_idx
+    ST& dst, const GL& src, const COORD& idx, const GL_IDX& sorted_token_ids
 ) {
     using T = typename ST::dtype;
+    constexpr int axis = 2;
+
     const int row_stride = src.template stride<axis>();
     constexpr int elem_per_memcpy = sizeof(float4) / sizeof(typename ST::dtype);
     constexpr int elem_per_half_memcpy = sizeof(float2) / sizeof(typename ST::dtype);
@@ -66,10 +67,9 @@ __device__ inline void gather_load(
     // coord. for token mapping, uses scaled permuted M index as column index, since it's a 1D tile
     coord<> tm_coord(0, 0, 0, unit_coord.r);
     // already-scaled physical K index w/o permuted M index
-    // src_ptr is only offset in K-axis based on BLOCK_K coord., we do our own M-axis offset based on token IDs inside load loop 
+    // src_ptr only offset in K-axis based on BLOCK_K coord., we do our own M-axis offset based on token IDs inside load loop 
     coord<> k_coord(0, 0, 0, unit_coord.c);
 
-    const int valid_rows = end_idx - unit_coord.r;
     typename GL::dtype *src_ptr = (typename GL::dtype*)&src[k_coord];
     typename GL_IDX::dtype *tm_ptr = (typename GL_IDX::dtype*)&token_mapping[tm_coord];
 
@@ -87,9 +87,12 @@ __device__ inline void gather_load(
             int load_idx = (offset + j) * N_THREADS + laneid;
             int row = load_idx / memcpy_per_row;
             int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
+            int packed = tm_ptr[row];  // always 32-bits
+            int token_id = packed & 0xFFFFFF;
+            // int topk_slot = packed >> 24;  // don't need if not fusing weight reduction
 
-            if (row < valid_rows) {
-                int token_id = tm_ptr[row];  // TODO: use as-is or decode
+            // TODO: compare against raw_buffer_load w/ hardware supported OOB reads to avoid this conditional
+            if (token_id != src.rows()) {
                 buf[j] = load_global_vec4_async((float4*) (src_ptr + (token_id * row_stride + col)));
             }
         }
@@ -105,7 +108,7 @@ __device__ inline void gather_load(
             int row = load_idx / memcpy_per_row;
             int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
 
-            if (row < valid_rows) {
+            if (token_id != src.rows()) {
                 store_shared_vec(dst.idx(dst_ptr, {row, col}), {buf[j].x, buf[j].y});
                 store_shared_vec(dst.idx(dst_ptr, {row, col + elem_per_half_memcpy}), {buf[j].z, buf[j].w});
             }
@@ -119,22 +122,22 @@ __device__ inline void gather_load(
     }
 }
 
-struct micro_globals {
+struct moe_stage1_globals {
     _gl_A A;
     _gl_B B;
     _gl_C C;
-    _gl_meta token_mapping;
-    _gl_meta tile_to_expert;
-    _gl_meta tile_to_m_limit;
-    int num_valid_tiles;
+    _gl_meta sorted_token_ids;
+    _gl_meta sorted_expert_ids;
+    int num_valid_tiles;  // equivalent to (num_valid_ids[0] / BLOCK_M)
     hipStream_t stream;
 
     dim3 block() { return dim3(NUM_WARPS * WARP_THREADS); }
     size_t dynamic_shared_memory() { return SMEM_BYTES; }
 };
 
+// TODO: add PTPC quantization
 __global__ __launch_bounds__(NUM_WARPS * WARP_THREADS, 2)
-void kernel(const micro_globals g) {
+void kernel(const moe_stage1_globals g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
     
@@ -153,10 +156,9 @@ void kernel(const micro_globals g) {
     const int total_tiles = g.num_valid_tiles * (D_EXPERT / BLOCK_N);
     for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
         int gl_m_tile = lt % g.num_valid_tiles, n_tile = lt / g.num_valid_tiles;
-        int expert = g.tile_to_expert[gl_m_tile];
-        int end_token_idx = g.tile_to_m_limit[gl_m_tile];
+        int expert = g.sorted_expert_ids[gl_m_tile];
 
-        gather_load<2, NUM_WARPS * NUM_THREADS>(As, g.A, {0, 0, gl_m_tile, 0}, g.token_mapping, end_token_idx);
+        gather_load<NUM_WARPS * NUM_THREADS>(As, g.A, {0, 0, gl_m_tile, 0}, g.sorted_token_ids);
         G::load(Bs, g.B, {0, expert, n_tile, 0});
         __builtin_amdgcn_s_barrier();
 
