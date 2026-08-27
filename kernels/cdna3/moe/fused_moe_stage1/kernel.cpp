@@ -1,6 +1,7 @@
 #include "kittens.cuh" 
 #include "pyutils/pyutils.cuh"
 #include <hip/hip_runtime.h>
+#include "utils.cpp"
 
 using namespace kittens;
 
@@ -18,125 +19,35 @@ constexpr int BLOCK_K = 256;
 constexpr int REG_M = 16;
 constexpr int REG_N = 16;
 constexpr int REG_K = 32;
+constexpr int NUM_THREADS = NUM_WARPS * WARP_THREADS;
 constexpr int WEIGHT_SWIZZLE_GRANULARITY = BLOCK_N / 2;
 constexpr size_t SMEM_BYTES = BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K;
 static_assert(SMEM_BYTES <= 64 * 1024, "SMEM_BYTES exceeds gfx942 LDS size (64 KiB)");
 
 using G = kittens::group<NUM_WARPS>;
 using _gl_A = gl<fp8e4m3,1,1,-1,-1>;
-using _gl_B = gl<fp8e4m3,1,-1,-1,-1>;
-using _gl_C = gl<float,-1,-1,-1,-1>;
+using _gl_B = gl<fp8e4m3,1,-1,-1,-1>;  // [expert, d_expert * 2, d_hidden]
+using _gl_C = gl<float,1,-1,-1,-1>;  // [M, topK_slot, d_expert]
+using _gl_scales = gl<float,1,1,1,-1>;
 using _gl_meta = gl<int,1,1,1,-1>;
-
-/**
- * @brief Gathers non-contiguous rows from a global tile into a shared tile selected by a mapping.
- *
- * @tparam ST The shared tile type.
- * @tparam GL The global tile type for the physical activations matrix.
- * @tparam GL_IDX The global tile type for the token mappings array.
- * @tparam COORD Coord type.
- * @param dst[out]  The destination shared tile.
- * @param src[in]   The source global tensor (unpermuted activations), shape [M, d_hidden].
- * @param idx[in]   Tile coordinate (m_tile, k_tile): m_tile is the M-tile index into the
- *                  PERMUTED row space; k_tile is the column-block index into src's actual K axis.
- * @param sorted_token_ids[in]  Array mapping each permuted-space row index to its
- *                              corresponding bit-packed int, which encodes the token index in 
- *                              src. in the lower 24-bits, and its top-K slot in the upper 8.
- *                              Only reads indices [m_tile * BLOCK_M, m_tile * 2 * BLOCK_M).
- */
-template
-    int N_THREADS,
-    ducks::st::all ST,
-    ducks::gl::all GL,
-    ducks::gl::all GL_IDX,
-    ducks::coord::tile COORD = coord<ST>
->
-__device__ inline void gather_load(
-    ST& dst, const GL& src, const COORD& idx, const GL_IDX& sorted_token_ids
-) {
-    using T = typename ST::dtype;
-    constexpr int axis = 2;
-
-    const int row_stride = src.template stride<axis>();
-    constexpr int elem_per_memcpy = sizeof(float4) / sizeof(typename ST::dtype);
-    constexpr int elem_per_half_memcpy = sizeof(float2) / sizeof(typename ST::dtype);
-    constexpr int memcpy_per_row = ST::cols / elem_per_memcpy;
-    constexpr int total_calls = (ST::cols * ST::rows + N_THREADS*elem_per_memcpy-1) / (N_THREADS*elem_per_memcpy);
-
-    coord<> unit_coord = idx.template unit_coord<axis, 3>();
-    // coord. for token mapping, uses scaled permuted M index as column index, since it's a 1D tile
-    coord<> tm_coord(0, 0, 0, unit_coord.r);
-    // already-scaled physical K index w/o permuted M index
-    // src_ptr only offset in K-axis based on BLOCK_K coord., we do our own M-axis offset based on token IDs inside load loop 
-    coord<> k_coord(0, 0, 0, unit_coord.c);
-
-    typename GL::dtype *src_ptr = (typename GL::dtype*)&src[k_coord];
-    typename GL_IDX::dtype *tm_ptr = (typename GL_IDX::dtype*)&token_mapping[tm_coord];
-
-    uint32_t dst_ptr = reinterpret_cast<uintptr_t>(&dst.data[0]);
-    const int laneid = threadIdx.x % N_THREADS;
-
-    const int small_calls = 4;  // this should vary based on batch size?
-    const int big_calls = (total_calls + small_calls - 1) / small_calls;
-    float4    buf[small_calls];
-
-    for (int i = 0; i < big_calls; i++) {
-        const int offset = i * small_calls;
-        #pragma unroll
-        for (int j = 0; j < small_calls; j++) {
-            int load_idx = (offset + j) * N_THREADS + laneid;
-            int row = load_idx / memcpy_per_row;
-            int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
-            int packed = tm_ptr[row];  // always 32-bits
-            int token_id = packed & 0xFFFFFF;
-            // int topk_slot = packed >> 24;  // don't need if not fusing weight reduction
-
-            // TODO: compare against raw_buffer_load w/ hardware supported OOB reads to avoid this conditional
-            if (token_id != src.rows()) {
-                buf[j] = load_global_vec4_async((float4*) (src_ptr + (token_id * row_stride + col)));
-            }
-        }
-        #ifdef BUILTINS_ONLY
-        __builtin_amdgcn_s_waitcnt(0);
-        #else
-        asm volatile("s_waitcnt vmcnt(0)");
-        #endif
-
-        #pragma unroll
-        for(int j = 0; j < small_calls; j++) {
-            int load_idx = (offset + j) * N_THREADS + laneid;
-            int row = load_idx / memcpy_per_row;
-            int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
-
-            if (token_id != src.rows()) {
-                store_shared_vec(dst.idx(dst_ptr, {row, col}), {buf[j].x, buf[j].y});
-                store_shared_vec(dst.idx(dst_ptr, {row, col + elem_per_half_memcpy}), {buf[j].z, buf[j].w});
-            }
-        }
-
-        #ifdef BUILTINS_ONLY
-        __builtin_amdgcn_s_waitcnt(0);
-        #else
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        #endif
-    }
-}
 
 struct moe_stage1_globals {
     _gl_A A;
+    _gl_scales sf_A;
     _gl_B B;
+    _gl_scales sf_B;
     _gl_C C;
     _gl_meta sorted_token_ids;
     _gl_meta sorted_expert_ids;
     int num_valid_tiles;  // equivalent to (num_valid_ids[0] / BLOCK_M)
     hipStream_t stream;
 
-    dim3 block() { return dim3(NUM_WARPS * WARP_THREADS); }
+    dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return SMEM_BYTES; }
 };
 
 // TODO: add PTPC quantization
-__global__ __launch_bounds__(NUM_WARPS * WARP_THREADS, 2)
+__global__ __launch_bounds__(NUM_THREADS, 2)
 void kernel(const moe_stage1_globals g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
@@ -158,7 +69,7 @@ void kernel(const moe_stage1_globals g) {
         int gl_m_tile = lt % g.num_valid_tiles, n_tile = lt / g.num_valid_tiles;
         int expert = g.sorted_expert_ids[gl_m_tile];
 
-        gather_load<NUM_WARPS * NUM_THREADS>(As, g.A, {0, 0, gl_m_tile, 0}, g.sorted_token_ids);
+        gather_load<NUM_THREADS>(As, g.A, {0, 0, gl_m_tile, 0}, g.sorted_token_ids);
         G::load(Bs, g.B, {0, expert, n_tile, 0});
         __builtin_amdgcn_s_barrier();
 
@@ -172,12 +83,14 @@ void kernel(const moe_stage1_globals g) {
             constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K) / NUM_THREADS / sizeof(float4) / sizeof(fp8e4m3);
             float4 a_buffer_next[BUFFER_SIZE_A];
             float4 b_buffer_next[BUFFER_SIZE_B];
-
+            
+            load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, g.B, {0, expert, n_tile, K_TILE + 1}, Bs);
+            
         }
     }
 }
 
-void call(micro_globals g) {
+void call(moe_stage1_globals g) {
     unsigned long mem_size = g.dynamic_shared_memory();
     hipFuncSetAttribute((void*)kernel, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
     hipDeviceProp_t prop;
