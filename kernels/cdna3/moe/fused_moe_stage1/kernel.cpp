@@ -55,7 +55,8 @@ void kernel(const moe_stage1_globals g) {
     auto (&As) = al.allocate<st<fp8e4m3, BLOCK_M, BLOCK_K>>();
     auto (&Bs) = al.allocate<st<fp8e4m3, BLOCK_N, BLOCK_K>>();
     auto (&sf_A) = al.allocate<sv_fl<BLOCK_M>>();
-    auto (&sf_B) = al.allocate<sv_fl<BLOCK_N>>();
+    auto (&sf_gate) = al.allocate<sv_fl<WEIGHT_SWIZZLE_GRANULARITY>>();
+    auto (&sf_up) = al.allocate<sv_fl<WEIGHT_SWIZZLE_GRANULARITY>>();
     rt<fp8e4m3, REG_M, REG_K> tiles_a[4];
     rt<fp8e4m3, REG_N, REG_K> tiles_b[8];
     rt_fl<REG_M, REG_N, ducks::rt_layout::col> accum[2];
@@ -162,9 +163,8 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
         }
-        // TODO: add PTPC quantization epilogue
         __builtin_amdgcn_sched_barrier(0);
-        gather_f32_sf_a(sf_A, g.sf_A, {gl_m_tile}, g.sorted_token_ids);
+        gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {gl_m_tile}, g.sorted_token_ids);
         load(tiles_a[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
         load(tiles_a[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
         load(tiles_b[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
@@ -182,6 +182,7 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
+        gather_f32_sf_b<NUM_THREADS>(sf_B, g.sf_B, {expert, n_tile});
         load(tiles_b[2], subtile_inplace<REG_M, REG_K>(Bs, {warp_col, 2}));
         load(tiles_b[3], subtile_inplace<REG_M, REG_K>(Bs, {warp_col, 3}));
         load(tiles_a[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));

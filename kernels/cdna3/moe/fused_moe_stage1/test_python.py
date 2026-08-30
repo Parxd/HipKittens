@@ -16,8 +16,8 @@ def interleave_gate_up(gate, up, granularity):
     up_chunks   = up.reshape(d_expert // granularity, granularity, d_hidden)
 
     # Stack so each chunk pair is adjacent: (num_chunks, 2, granularity, d_hidden)
-    # dim=1 ordering: [up_chunk, gate_chunk] to match "[up_0:64, gate_64:128, ...]"
-    interleaved = torch.stack([up_chunks, gate_chunks], dim=1)
+    # dim=1 ordering: [gate_chunk, up_chunk] to match "[gate_0:64, up_64:128, ...]"
+    interleaved = torch.stack([gate_chunks, up_chunks], dim=1)
 
     # Flatten back to (2 * D_EXPERT, D_HIDDEN)
     return interleaved.reshape(2 * d_expert, d_hidden)

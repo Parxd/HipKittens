@@ -18,6 +18,7 @@ __device__ inline void store_shared_f32(uint32_t lds_off, float val) {
 /**
  * @brief Gathers non-contiguous rows from a global tile into a shared tile selected by a mapping.
  *
+ * @tparam N_THREADS  The number of threads used.
  * @tparam ST The shared tile type.
  * @tparam GL The global tile type for the physical activations matrix.
  * @tparam GL_IDX The global tile type for the token mappings array.
@@ -111,6 +112,7 @@ __device__ inline void gather_load(
 /**
  * @brief Gathers non-contiguous rows from a global tile into register buffers selected by a mapping.
  *
+ * @tparam N_THREADS  The number of threads used.
  * @tparam ST The shared tile type.
  * @tparam GL The global tile type for the physical activations matrix.
  * @tparam GL_IDX The global tile type for the token mappings array.
@@ -181,26 +183,26 @@ template<int N_THREADS,
         ducks::sv::all SV, 
         ducks::gl::all GL,
         ducks::gl::all GL_IDX,
-        ducks::coord::tile COORD = coord<SV>
+        ducks::coord::vec COORD=coord<SV>
 >
 __device__ inline void gather_f32_sf_a(
     SV& dst, const GL& src, const COORD& idx, const GL_IDX& sorted_token_ids
 ) {
-    // in practice, BLOCK_M (i.e. dst.length) should always be less than N_THREADS, so total_calls = 1
-    int total_calls = (dst.length + N_THREADS - 1) / N_THREADS;
+    // in practice, BLOCK_M (i.e. dst.length) is probably less than N_THREADS, so total_calls = 1
+    constexpr int total_calls = (SV::length + N_THREADS - 1) / N_THREADS;
     float buf[total_calls];
     coord<> unit_coord = idx.template unit_coord<-1, 3>();
     float* base_ptr = (float*)&src[unit_coord];
     typename GL_IDX::dtype* tm_ptr = (typename GL_IDX::dtype*)&sorted_token_ids[unit_coord];
     uint32_t dst_ptr = reinterpret_cast<uintptr_t>(&dst.data[0]);
-    int laneid = threadIdx.x % N_THREADS;
+    const int laneid = threadIdx.x % N_THREADS;
 
-    int total_bytes = dst.length * sizeof(float);
+    const int total_bytes = src.cols() * sizeof(float);
     i32x4 srsrc = make_srsrc(base_ptr, total_bytes, sizeof(float));
     
     #pragma unroll
     for (int i = 0; i < total_calls; ++i) {
-        if (laneid < dst.length) {  // one lane per row in BLOCK_M, mask out lanes that exceed this block's segment
+        if (laneid < SV::length) {  // one lane per row in BLOCK_M, mask out lanes that exceed this block's segment
             int token_id = tm_ptr[laneid + i * N_THREADS] & 0xFFFFFF;
             int byte_offset = token_id * sizeof(float);
             buf[i] = llvm_amdgcn_raw_buffer_load_f32(srsrc, byte_offset, 0, 0);
@@ -213,4 +215,36 @@ __device__ inline void gather_f32_sf_a(
     #else
     asm volatile("s_waitcnt lgkmcnt(0)");
     #endif
+}
+
+/**
+ * @brief Gathers PC (per-channel) expert's gate+up concatenated fp32 scale factors.
+ *        Assumes gate+up weights are block-interleaved by granularity of (BLOCK_N / 2),
+ *        but scale factors do NOT follow this and are simply concatenated. The resulting
+ *        shape is [expert, gate_weight_sf + up_weight_sf].
+ *
+ * @tparam N_THREADS  The number of threads used.
+ * @tparam SV The shared vector type.
+ * @tparam GL The global tile type.
+ * @tparam COORD Coord type.
+ * @param dst[out]  The destination shared vector.
+ * @param src[in]  The source global tile.
+ * @param idx[in]  Coord. of [expert, n_tile_index]
+ */
+template<int N_THREADS,
+        ducks::sv::all SV, 
+        ducks::gl::all GL,
+        ducks::coord::vec COORD=coord<SV>
+>
+__device__ inline void gather_f32_sf_b(
+    SV& dst, const GL& src, const COORD& idx
+) {
+    constexpr int elem_per_transfer = sizeof(float4) / sizeof(typename SV::dtype);
+    constexpr int total_calls = (SV::length + N_THREADS*elem_per_transfer - 1) / (N_THREADS*elem_per_transfer);
+    coord<> unit_coord = idx.template unit_coord<-1, 3>();
+    int sf_tile_idx = unit_coord.c;
+
+    float* src_ptr = (float*)&src[unit_coord];
+
+    float buf[total_calls];
 }
