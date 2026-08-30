@@ -2,6 +2,10 @@
 
 using namespace kittens;
 
+extern "C" __device__ float
+llvm_amdgcn_raw_buffer_load_f32(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.load.f32");
+
 /**
  * @brief Gathers non-contiguous rows from a global tile into a shared tile selected by a mapping.
  *
@@ -113,7 +117,7 @@ __device__ inline void gather_load(
  *                              Padding tokens are marked as M, as valid tokens range from [0, M - 1].
  *                              Only reads indices [m_tile * BLOCK_M, m_tile * 2 * BLOCK_M).
  */
-template<int N_THREADS = WARP_THREADS,
+template<int N_THREADS,
         ducks::st::all ST, 
         ducks::gl::all GL,
         ducks::gl::all GL_IDX,
@@ -162,4 +166,26 @@ __device__ inline void gather_load_global_to_register_buffer(
             }
         }
     }
+}
+
+template<int N_THREADS,
+        ducks::sv::all SV, 
+        ducks::gl::all GL,
+        ducks::gl::all GL_IDX,
+        ducks::coord::tile COORD = coord<SV>
+>
+__device__ inline void gather_sf_a(
+    SV& dst, const GL& src, const COORD& idx, const GL_IDX& sorted_token_ids
+) {
+    using T = float;
+
+    int total_calls = (dst.length + N_THREADS - 1) / N_THREADS;
+    coord<> unit_coord = idx.template unit_coord<-1, 3>();
+    T* base_ptr = (T*)&src[unit_coord];
+    typename GL_IDX::dtype* tm_ptr = (typename GL_IDX::dtype*)&sorted_token_ids[unit_coord];
+    int laneid = threadIdx.x % N_THREADS;
+
+    int total_bytes = dst.length * sizeof(T);
+    i32x4 srsrc = make_srsrc(base_ptr, total_bytes, sizeof(T));
+    
 }
