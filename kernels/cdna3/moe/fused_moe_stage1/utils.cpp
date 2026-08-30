@@ -2,9 +2,18 @@
 
 using namespace kittens;
 
-extern "C" __device__ float
+extern "C" __device__ inline float
 llvm_amdgcn_raw_buffer_load_f32(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
     __asm("llvm.amdgcn.raw.buffer.load.f32");
+
+__device__ inline void store_shared_f32(uint32_t lds_off, float val) {
+    asm volatile(
+        "ds_write_b32 %0, %1\n"
+        :
+        : "v"(lds_off), "v"(val)
+        : "memory"
+    );
+}
 
 /**
  * @brief Gathers non-contiguous rows from a global tile into a shared tile selected by a mapping.
@@ -174,18 +183,34 @@ template<int N_THREADS,
         ducks::gl::all GL_IDX,
         ducks::coord::tile COORD = coord<SV>
 >
-__device__ inline void gather_sf_a(
+__device__ inline void gather_f32_sf_a(
     SV& dst, const GL& src, const COORD& idx, const GL_IDX& sorted_token_ids
 ) {
-    using T = float;
-
+    // in practice, BLOCK_M (i.e. dst.length) should always be less than N_THREADS, so total_calls = 1
     int total_calls = (dst.length + N_THREADS - 1) / N_THREADS;
+    float buf[total_calls];
     coord<> unit_coord = idx.template unit_coord<-1, 3>();
-    T* base_ptr = (T*)&src[unit_coord];
+    float* base_ptr = (float*)&src[unit_coord];
     typename GL_IDX::dtype* tm_ptr = (typename GL_IDX::dtype*)&sorted_token_ids[unit_coord];
+    uint32_t dst_ptr = reinterpret_cast<uintptr_t>(&dst.data[0]);
     int laneid = threadIdx.x % N_THREADS;
 
-    int total_bytes = dst.length * sizeof(T);
-    i32x4 srsrc = make_srsrc(base_ptr, total_bytes, sizeof(T));
+    int total_bytes = dst.length * sizeof(float);
+    i32x4 srsrc = make_srsrc(base_ptr, total_bytes, sizeof(float));
     
+    #pragma unroll
+    for (int i = 0; i < total_calls; ++i) {
+        if (laneid < dst.length) {  // one lane per row in BLOCK_M, mask out lanes that exceed this block's segment
+            int token_id = tm_ptr[laneid + i * N_THREADS] & 0xFFFFFF;
+            int byte_offset = token_id * sizeof(float);
+            buf[i] = llvm_amdgcn_raw_buffer_load_f32(srsrc, byte_offset, 0, 0);
+
+            store_shared_f32(dst.idx(dst_ptr, laneid), buf[i]);
+        }
+    }
+    #ifdef BUILTINS_ONLY
+    __builtin_amdgcn_s_waitcnt(0);
+    #else
+    asm volatile("s_waitcnt lgkmcnt(0)");
+    #endif
 }

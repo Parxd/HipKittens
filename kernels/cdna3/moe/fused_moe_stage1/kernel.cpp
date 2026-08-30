@@ -164,6 +164,7 @@ void kernel(const moe_stage1_globals g) {
         }
         // TODO: add PTPC quantization epilogue
         __builtin_amdgcn_sched_barrier(0);
+        gather_f32_sf_a(sf_A, g.sf_A, {gl_m_tile}, g.sorted_token_ids);
         load(tiles_a[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
         load(tiles_a[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
         load(tiles_b[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
