@@ -229,3 +229,29 @@ __device__ inline void gather_f32_sf_a(
     asm volatile("s_waitcnt lgkmcnt(0)");
     #endif
 }
+
+/** simply pass (warp_row, warp_col) as int2 and do manual offsetting, instead of passing dummy types to use w/ unit_coord
+ */
+template<ducks::rt::all RT,
+        ducks::sv::all SV_A,
+        ducks::sv::all SV_W,
+>
+__device__ inline apply_sf(RT& fragment, const& SV_A sf_A, const& SV_W sf_W, const& int2 warp_idx) {
+    const int m_seg = kittens::laneid() / 16, n_seg = kittens::laneid() % 16;
+    float buf_a[RT::height][RT::width][4];
+    float buf_w[RT::height][RT::width];
+
+    #pragma unroll
+    for (int i = 0; i < RT::height; ++i) {
+        #pragma unroll
+        for (int j = 0; j < RT::width; ++j) {
+            reinterpret_cast<float4*>(&buf_a[i][j][0]) = reinterpret_cast<float4*>(&sf_A[ ]);
+            buf_w[i][j] = sf_W[ ];
+
+            #pragma unroll
+            for (int k = 0; k < 4; ++k) {
+                fragment.tiles[i][j].data[k] *= buf_a[i][j][k] * buf_w[i][j];
+            }
+        }
+    }
+}

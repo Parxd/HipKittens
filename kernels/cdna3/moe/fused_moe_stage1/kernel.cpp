@@ -108,8 +108,8 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_sched_barrier(0);
 
             // Cluster 2
-            load(tiles_b[2], subtile_inplace<REG_M, REG_K>(Bs, {warp_col, 2}));
-            load(tiles_b[3], subtile_inplace<REG_M, REG_K>(Bs, {warp_col, 3}));
+            load(tiles_b[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 2}));
+            load(tiles_b[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 3}));
             load(tiles_a[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
             load(tiles_a[3], subtile_inplace<REG_M, REG_K>(As, {warp_row, 3}));
             __builtin_amdgcn_s_barrier();
@@ -128,10 +128,10 @@ void kernel(const moe_stage1_globals g) {
 
             // Cluster 4
             gather_load_global_to_register_buffer<2, false, NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, gl_m_tile, K_TILE + 1}, g.sorted_token_ids);
-            load(tiles_b[4], subtile_inplace<REG_M, REG_K>(Bs, {warp_col + 4, 0}));
-            load(tiles_b[5], subtile_inplace<REG_M, REG_K>(Bs, {warp_col + 4, 1}));
-            load(tiles_b[6], subtile_inplace<REG_M, REG_K>(Bs, {warp_col + 4, 2}));
-            load(tiles_b[7], subtile_inplace<REG_M, REG_K>(Bs, {warp_col + 4, 3}));
+            load(tiles_b[4], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
+            load(tiles_b[5], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
+            load(tiles_b[6], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 2}));
+            load(tiles_b[7], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 3}));
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
@@ -184,8 +184,8 @@ void kernel(const moe_stage1_globals g) {
 
         load(sf_gate, g.sf_B, {expert, n_tile});
         load(sf_up, g.sf_B, {expert, n_tile + (D_EXPERT / WEIGHT_SWIZZLE_GRANULARITY)});
-        load(tiles_b[2], subtile_inplace<REG_M, REG_K>(Bs, {warp_col, 2}));
-        load(tiles_b[3], subtile_inplace<REG_M, REG_K>(Bs, {warp_col, 3}));
+        load(tiles_b[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 2}));
+        load(tiles_b[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 3}));
         load(tiles_a[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
         load(tiles_a[3], subtile_inplace<REG_M, REG_K>(As, {warp_row, 3}));
         __builtin_amdgcn_s_barrier();
@@ -201,10 +201,10 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        load(tiles_b[4], subtile_inplace<REG_M, REG_K>(Bs, {warp_col + 4, 0}));
-        load(tiles_b[5], subtile_inplace<REG_M, REG_K>(Bs, {warp_col + 4, 1}));
-        load(tiles_b[6], subtile_inplace<REG_M, REG_K>(Bs, {warp_col + 4, 2}));
-        load(tiles_b[7], subtile_inplace<REG_M, REG_K>(Bs, {warp_col + 4, 3}));
+        load(tiles_b[4], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
+        load(tiles_b[5], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
+        load(tiles_b[6], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 2}));
+        load(tiles_b[7], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 3}));
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
