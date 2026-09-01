@@ -179,6 +179,19 @@ __device__ inline void gather_load_global_to_register_buffer(
     }
 }
 
+/**
+ * @brief Gathers PT (per-token) f32 scale factors.
+ *
+ * @tparam N_THREADS  The number of threads used.
+ * @tparam SV The shared vector type.
+ * @tparam GL The global tile type.
+ * @tparam GL_IDX  
+ * @tparam COORD Coord type.
+ * @param dst[out]  Destination shared vector.
+ * @param src[in]  The source global tile.
+ * @param idx[in]  Coord. of [m_tile_index]
+ * @param sorted_token_ids[in]  
+ */
 template<int N_THREADS,
         ducks::sv::all SV, 
         ducks::gl::all GL,
@@ -215,36 +228,4 @@ __device__ inline void gather_f32_sf_a(
     #else
     asm volatile("s_waitcnt lgkmcnt(0)");
     #endif
-}
-
-/**
- * @brief Gathers PC (per-channel) expert's gate+up concatenated fp32 scale factors.
- *        Assumes gate+up weights are block-interleaved by granularity of (BLOCK_N / 2),
- *        but scale factors do NOT follow this and are simply concatenated. The resulting
- *        shape is [expert, gate_weight_sf + up_weight_sf].
- *
- * @tparam N_THREADS  The number of threads used.
- * @tparam SV The shared vector type.
- * @tparam GL The global tile type.
- * @tparam COORD Coord type.
- * @param dst[out]  The destination shared vector.
- * @param src[in]  The source global tile.
- * @param idx[in]  Coord. of [expert, n_tile_index]
- */
-template<int N_THREADS,
-        ducks::sv::all SV, 
-        ducks::gl::all GL,
-        ducks::coord::vec COORD=coord<SV>
->
-__device__ inline void gather_f32_sf_b(
-    SV& dst, const GL& src, const COORD& idx
-) {
-    constexpr int elem_per_transfer = sizeof(float4) / sizeof(typename SV::dtype);
-    constexpr int total_calls = (SV::length + N_THREADS*elem_per_transfer - 1) / (N_THREADS*elem_per_transfer);
-    coord<> unit_coord = idx.template unit_coord<-1, 3>();
-    int sf_tile_idx = unit_coord.c;
-
-    float* src_ptr = (float*)&src[unit_coord];
-
-    float buf[total_calls];
 }

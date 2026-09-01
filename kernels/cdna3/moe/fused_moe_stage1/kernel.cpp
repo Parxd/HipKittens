@@ -67,7 +67,7 @@ void kernel(const moe_stage1_globals g) {
     constexpr int k_iters = D_HIDDEN / BLOCK_K;
 
     // TODO: add tile swizzling--stack intra-XCD SMs along intra-expert M-tiles first
-    const int total_tiles = g.num_valid_tiles * (D_EXPERT / BLOCK_N);
+    const int total_tiles = g.num_valid_tiles * (2 * D_EXPERT / BLOCK_N);
     for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
         int gl_m_tile = lt % g.num_valid_tiles, n_tile = lt / g.num_valid_tiles;
         int expert = g.sorted_expert_ids[gl_m_tile];
@@ -182,7 +182,8 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        gather_f32_sf_b<NUM_THREADS>(sf_B, g.sf_B, {expert, n_tile});
+        load(sf_gate, g.sf_B, {expert, n_tile});
+        load(sf_up, g.sf_B, {expert, n_tile + (D_EXPERT / WEIGHT_SWIZZLE_GRANULARITY)});
         load(tiles_b[2], subtile_inplace<REG_M, REG_K>(Bs, {warp_col, 2}));
         load(tiles_b[3], subtile_inplace<REG_M, REG_K>(Bs, {warp_col, 3}));
         load(tiles_a[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
