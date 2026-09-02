@@ -59,7 +59,10 @@ void kernel(const moe_stage1_globals g) {
     auto (&sf_up) = al.allocate<sv_fl<WEIGHT_SWIZZLE_GRANULARITY>>();
     rt<fp8e4m3, REG_M, REG_K> tiles_a[4];
     rt<fp8e4m3, REG_N, REG_K> tiles_b[8];
-    rt_fl<REG_M, REG_N, ducks::rt_layout::col> accum[2];
+    rt_fl<REG_M, REG_N, ducks::rt_layout::col> accum[2];  // 0: gate accum., 1: up accum.
+    rv_fl<REG_M, ducks::rv_layout::align> reg_sf_A;
+    rv_fl<REG_N, ducks::rv_layout::ortho> reg_sf_W[2];
+
     for (int i = 0; i < 2; i++) { zero(accum[i]); }
     
     const int warp_id = warpid();
