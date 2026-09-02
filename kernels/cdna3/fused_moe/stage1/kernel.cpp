@@ -24,10 +24,11 @@ constexpr int WEIGHT_SWIZZLE_GRANULARITY = BLOCK_N / 2;
 constexpr size_t SMEM_BYTES = BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K;
 static_assert(SMEM_BYTES <= 64 * 1024, "SMEM_BYTES exceeds gfx942 LDS size (64 KiB)");
 
+using out_dtype = typename bf16;
 using G = kittens::group<NUM_WARPS>;
 using _gl_A = gl<fp8e4m3,1,1,-1,-1>;
 using _gl_B = gl<fp8e4m3,1,-1,-1,-1>;  // [expert, d_expert * 2, d_hidden]
-using _gl_C = gl<float,1,-1,-1,-1>;  // [M, topK_slot, d_expert]
+using _gl_C = gl<out_dtype,1,-1,-1,-1>;  // [M, topK_slot, d_expert]
 using _gl_sf_A = gl<float,1,1,1,-1>;
 using _gl_sf_B = gl<float,1,1,-1,-1>;  // [expert, d_expert * 2]
 using _gl_meta = gl<int,1,1,1,-1>;
@@ -187,6 +188,7 @@ void kernel(const moe_stage1_globals g) {
 
         load(sf_gate, g.sf_B, {expert, n_tile});
         load(sf_up, g.sf_B, {expert, n_tile + (D_EXPERT / WEIGHT_SWIZZLE_GRANULARITY)});
+        load(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
         load(tiles_b[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 2}));
         load(tiles_b[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 3}));
         load(tiles_a[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
@@ -204,6 +206,8 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
+        load(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
+        load(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
         load(tiles_b[4], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
         load(tiles_b[5], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
         load(tiles_b[6], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 2}));
@@ -229,6 +233,14 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_setprio(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
+
+        mul_row(accum[0], accum[0], reg_sf_A);
+        mul_col(accum[0], accum[0], reg_sf_W[0]);
+        mul_row(accum[1], accum[1], reg_sf_A);
+        mul_col(accum[1], accum[1], reg_sf_W[1]);
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
     }
 }
 
