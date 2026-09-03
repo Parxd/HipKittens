@@ -63,7 +63,6 @@ void kernel(const moe_stage1_globals g) {
     rt_fl<REG_M, REG_N, ducks::rt_layout::col> accum[2];  // 0: gate accum., 1: up accum.
     rv_fl<REG_M, ducks::rv_layout::align> reg_sf_A;
     rv_fl<REG_N, ducks::rv_layout::ortho> reg_sf_W[2];
-
     for (int i = 0; i < 2; i++) { zero(accum[i]); }
     
     const int warp_id = warpid();
@@ -238,9 +237,10 @@ void kernel(const moe_stage1_globals g) {
         mul_col(accum[0], accum[0], reg_sf_W[0]);
         mul_row(accum[1], accum[1], reg_sf_A);
         mul_col(accum[1], accum[1], reg_sf_W[1]);
+        silu(accum[0], accum[0]);
+        mul(accum[0], accum[0], accum[1]);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
-
     }
 }
 

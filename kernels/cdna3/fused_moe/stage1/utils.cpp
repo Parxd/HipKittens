@@ -2,8 +2,6 @@
 
 using namespace kittens;
 
-static constexpr float EXP2_RESCALE = -1.4426950408889634;  // -(1 / ln(2))
-
 extern "C" __device__ inline float
 llvm_amdgcn_raw_buffer_load_f32(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
     __asm("llvm.amdgcn.raw.buffer.load.f32");
@@ -15,13 +13,6 @@ __device__ inline void store_shared_f32(uint32_t lds_off, float val) {
         : "v"(lds_off), "v"(val)
         : "memory"
     );
-}
-
-template <ducks::rt::all RT>
-__device__ inline void sigmoid(RT& dst, const RT& src) {
-    mul(dst, src, EXP2_RESCALE);
-    exp2(dst, src);
-    add(dst, 1.0f);
 }
 
 /**
