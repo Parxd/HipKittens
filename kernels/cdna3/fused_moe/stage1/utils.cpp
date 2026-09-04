@@ -232,10 +232,11 @@ __device__ inline void gather_f32_sf_a(
 
 template<ducks::rt::all RT,
         ducks::gl::all GL,
+        ducks::gl::all GL_IDX,
         ducks::coord::tile COORD=coord<RT>
 >
 __device__  inline void scatter_store(
-    GL& dst, const RT& src, const COORD& idx
+    GL& dst, const RT& src, const COORD& idx, const GL_IDX& sorted_token_ids
 ) {
-    
+    coord<> token_idx = idx.template unit_coord<2, 3>();
 }

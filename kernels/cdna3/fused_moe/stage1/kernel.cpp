@@ -6,11 +6,13 @@
 using namespace kittens;
 
 #define NUM_WARPS 8
+#define SPLIT_K False
 
 // MoE constants
 constexpr int EXPERTS = 256;
 constexpr int D_HIDDEN = 7168;
 constexpr int D_EXPERT = 512;
+constexpr int TOP_K = 2;
 
 // intra-gemm constants
 constexpr int BLOCK_M = 32;
@@ -28,7 +30,7 @@ using out_dtype = typename bf16;
 using G = kittens::group<NUM_WARPS>;
 using _gl_A = gl<fp8e4m3,1,1,-1,-1>;
 using _gl_B = gl<fp8e4m3,1,-1,-1,-1>;  // [expert, d_expert * 2, d_hidden]
-using _gl_C = gl<out_dtype,1,-1,-1,-1>;  // [M, topK_slot, d_expert]
+using _gl_C = gl<out_dtype,1,1,-1,-1>;  // [M * topK, d_expert]
 using _gl_sf_A = gl<float,1,1,1,-1>;
 using _gl_sf_B = gl<float,1,1,-1,-1>;  // [expert, d_expert * 2]
 using _gl_meta = gl<int,1,1,1,-1>;
@@ -245,6 +247,7 @@ void kernel(const moe_stage1_globals g) {
         if (warp_row == 0) {
             __builtin_amdgcn_s_barrier();
         }
+        scatter_store(g.C, accum[0], { }, g.sorted_token_ids);
     }
 }
 
