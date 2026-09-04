@@ -229,3 +229,13 @@ __device__ inline void gather_f32_sf_a(
     asm volatile("s_waitcnt lgkmcnt(0)");
     #endif
 }
+
+template<ducks::rt::all RT,
+        ducks::gl::all GL,
+        ducks::coord::tile COORD=coord<RT>
+>
+__device__  inline void scatter_store(
+    GL& dst, const RT& src, const COORD& idx
+) {
+    
+}

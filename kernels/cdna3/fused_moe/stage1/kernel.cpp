@@ -241,6 +241,10 @@ void kernel(const moe_stage1_globals g) {
         mul(accum[0], accum[0], accum[1]);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
+
+        if (warp_row == 0) {
+            __builtin_amdgcn_s_barrier();
+        }
     }
 }
 
