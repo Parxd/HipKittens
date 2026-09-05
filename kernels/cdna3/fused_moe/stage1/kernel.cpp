@@ -247,7 +247,7 @@ void kernel(const moe_stage1_globals g) {
         if (warp_row == 0) {
             __builtin_amdgcn_s_barrier();
         }
-        scatter_store(g.C, accum[0], { }, g.sorted_token_ids);
+        scatter_store<TOP_K>(g.C, accum[0], {0, 0, gl_m_tile * 2 + warp_row, n_tile * 4 + warp_col}, g.sorted_token_ids);
     }
 }
 

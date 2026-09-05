@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include <cmath>
 #include <limits>
 #include "base_types.cuh"
 
