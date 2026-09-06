@@ -65,7 +65,7 @@ sorted_ids, _sorted_weights, sorted_expert_ids, num_valid_ids, _moe_buf = (
     )
 )
 
-out = torch.empty((sorted_ids.numel(), inter_dim), dtype=torch.bfloat16, device="cuda")
+out = torch.empty((num_tokens * topk, inter_dim), dtype=torch.bfloat16, device="cuda")
 a1_scale = torch.rand(num_tokens, 1, dtype=torch.float32, device="cuda")
 w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
 

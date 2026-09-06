@@ -3,8 +3,8 @@
 using namespace kittens;
 
 extern "C" __device__ inline float
-llvm_amdgcn_raw_buffer_load_bf16(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
-    __asm("llvm.amdgcn.raw.buffer.load.bf16");
+llvm_amdgcn_raw_buffer_store_bf16(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.store.bf16");
 
 extern "C" __device__ inline float
 llvm_amdgcn_raw_buffer_load_f32(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
@@ -86,11 +86,7 @@ __device__ inline void gather_load(
                 buf[j] = load_global_vec4_async((float4*) (src_ptr + (token_id * row_stride + col)));
             }
         }
-        #ifdef BUILTINS_ONLY
-        __builtin_amdgcn_s_waitcnt(0);
-        #else
         asm volatile("s_waitcnt vmcnt(0)");
-        #endif
 
         #pragma unroll
         for(int j = 0; j < small_calls; j++) {
@@ -104,12 +100,7 @@ __device__ inline void gather_load(
                 store_shared_vec(dst.idx(dst_ptr, {row, col + elem_per_half_memcpy}), {buf[j].z, buf[j].w});
             }
         }
-
-        #ifdef BUILTINS_ONLY
-        __builtin_amdgcn_s_waitcnt(0);
-        #else
         asm volatile("s_waitcnt lgkmcnt(0)");
-        #endif
     }
 }
 
@@ -187,10 +178,6 @@ __device__ inline void gather_load_global_to_register_buffer(
  * @brief Gathers PT (per-token) f32 scale factors.
  *
  * @tparam N_THREADS  The number of threads used.
- * @tparam SV The shared vector type.
- * @tparam GL The global tile type.
- * @tparam GL_IDX  
- * @tparam COORD Coord type.
  * @param dst[out]  Destination shared vector.
  * @param src[in]  The source global tile.
  * @param idx[in]  Coord. of [m_tile_index]
@@ -227,17 +214,21 @@ __device__ inline void gather_f32_sf_a(
             store_shared_f32(dst.idx(dst_ptr, laneid), buf[i]);
         }
     }
-    #ifdef BUILTINS_ONLY
-    __builtin_amdgcn_s_waitcnt(0);
-    #else
     asm volatile("s_waitcnt lgkmcnt(0)");
-    #endif
 }
 
 /**
- * @brief Requires f32 source RT dtype and bf16 destination GL dtype
+ * @brief Requires f32 source RT dtype & bf16 destination GL dtype
  *        to enable use of llvm_amdgcn_raw_buffer_store_bf16
- * 
+ * @tparam TOP_K  Mixture-of-Experts Top-K parameter
+ * @param dst[out]  Destination global tile
+ * @param src[in]  Source register tile
+ * @param idx[in]  Coord. of warp's register tile
+ * @param sorted_token_ids[in]  Array mapping each permuted-space row index to its
+ *                              corresponding bit-packed int, which encodes the token index in 
+ *                              src. in the lower 24-bits, and its top-K slot in the upper 8.
+ *                              Padding tokens are marked as M, as valid tokens range from [0, M - 1].
+ *                              Only reads indices [m_tile * BLOCK_M, m_tile * 2 * BLOCK_M).
  */
 template<int TOP_K,
         ducks::rt::all RT,
@@ -257,26 +248,28 @@ __device__  inline void scatter_store(
 
     coord<> tm_coord(0, 0, 0, unit_coord.r);
     coord<> n_coord(0, 0, 0, unit_coord.c);
-    T* base_ptr = (T*)&dst[n_coord];
+    T* base_ptr = (T*)&dst[n_coord];  // block+warp col. offset only!
     typename GL_IDX::dtype* tm_ptr = (typename GL_IDX::dtype*)&sorted_token_ids[tm_coord];  // block+warp offset
 
     const int row_stride = dst.template stride<axis>();
     const int row_stride_bytes = row_stride * sizeof(T);
-    const int total_bytes = row_stride * dst.rows() * sizeof(T);  // M * top_k * inter_dim
+    const int total_bytes = row_stride * dst.rows() * sizeof(T);
     i32x4 srsrc = make_srsrc(base_ptr, total_bytes, row_stride_bytes);
     
     #pragma unroll
     for (int i = 0; i < RT::height; ++i) {
         #pragma unroll
         for (int j = 0; j < RT::width; ++j) {
+            float* flat = reinterpret_cast<float*>(src_tiles[i][j].data);  // avoid dealing w/ named attributes
             #pragma unroll
             for (int k = 0; k < 4; ++k) {
-                int row_offset = (i * 16) + (laneid() / 16 * 4) + k;  // idx. into sorted_token_ids
-                int col_offset = (j * 16) + (laneid() % 16);
-                int packed = tm_ptr[row_offset];  // don't need raw buffer load here b/c row_offset guaranteed to land in valid tiles
+                int row_offset = (i * 16) + (kittens::laneid() / 16 * 4) + k;
+                int col_offset = (j * 16) + (kittens::laneid() % 16);
+                int packed = tm_ptr[row_offset];  // no raw buffer load here b/c row_offset guaranteed to land in valid tiles
                 int token_id = packed & 0x00FFFFFF;
-                int topk_id = (packed & 0xFF000000) >> 24;
-                int byte_offset = ((token_id * TOP_K + topk_id) * row_stride + col_offset) * sizeof(T);
+                int topk_slot = (packed & 0xFF000000) >> 24;
+                int byte_offset = ((token_id * TOP_K + topk_slot) * row_stride + col_offset) * sizeof(T);
+                llvm_amdgcn_raw_buffer_store_bf16(__float2bfloat16(flat[k]), srsrc, byte_offset, 0, 0);
             }
         }
     }
