@@ -59,6 +59,9 @@ struct KITTENS_DEFAULT_ALIGN sv {
     __device__ static inline T* idx(T *ptr, int idx) { // useful for computations in shared address space, as silly as it sounds.
         return ptr[idx];
     }
+    __device__ static inline uint32_t idx(uint32_t ptr, int idx) {
+        return ptr + sizeof(T) * idx;
+    }
 
     __device__ inline       dtype& operator[](size_t idx)       { return data[idx]; }
     __device__ inline const dtype& operator[](size_t idx) const { return data[idx]; }

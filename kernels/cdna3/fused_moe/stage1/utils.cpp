@@ -3,7 +3,7 @@
 using namespace kittens;
 
 extern "C" __device__ inline float
-llvm_amdgcn_raw_buffer_store_bf16(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+llvm_amdgcn_raw_buffer_store_bf16(bf16 reg, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
     __asm("llvm.amdgcn.raw.buffer.store.bf16");
 
 extern "C" __device__ inline float
@@ -79,7 +79,7 @@ __device__ inline void gather_load(
             int load_idx = (offset + j) * N_THREADS + laneid;
             int row = load_idx / memcpy_per_row;
             int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
-            // int topk_slot = packed >> 24;  // don't need if not fusing weight reduction
+            int token_id = tm_ptr[row] & 0xFFFFFF;
 
             // TODO: compare against raw_buffer_load w/ hardware supported OOB reads to avoid this conditional
             if (token_id != src.rows()) {
@@ -130,7 +130,7 @@ template<int N_THREADS,
         ducks::coord::tile COORD = coord<ST>
 >
 __device__ inline void gather_load_global_to_register_buffer(
-    float4* reg_buffer, const int buffer_size, const GL& src, const COORD& idx, const GL_IDX& sorted_token_ids
+    float4* reg_buffer, const int buffer_size, const GL& src, const COORD& idx, const GL_IDX& sorted_token_ids, const ST& dst_template
 ) {
     using T = typename ST::dtype;
     constexpr int axis = 2;
@@ -241,8 +241,6 @@ __device__  inline void scatter_store(
 ) {
     using T = bf16;
     using U = float;
-    static_assert(std::is_same_v<GL::dtype, T>);
-    static_assert(std::is_same_v<RT::dtype, U>);
     constexpr int axis = 2;
     coord<> unit_coord = idx.template unit_coord<axis, 3>();
 
@@ -260,7 +258,7 @@ __device__  inline void scatter_store(
     for (int i = 0; i < RT::height; ++i) {
         #pragma unroll
         for (int j = 0; j < RT::width; ++j) {
-            float* flat = reinterpret_cast<float*>(src_tiles[i][j].data);  // avoid dealing w/ named attributes
+            const float* flat = reinterpret_cast<const float*>(src.tiles[i][j].data);  // avoid dealing w/ named attributes
             #pragma unroll
             for (int k = 0; k < 4; ++k) {
                 int row_offset = (i * 16) + (kittens::laneid() / 16 * 4) + k;
@@ -268,8 +266,11 @@ __device__  inline void scatter_store(
                 int packed = tm_ptr[row_offset];  // no raw buffer load here b/c row_offset guaranteed to land in valid tiles
                 int token_id = packed & 0x00FFFFFF;
                 int topk_slot = (packed & 0xFF000000) >> 24;
-                int byte_offset = ((token_id * TOP_K + topk_slot) * row_stride + col_offset) * sizeof(T);
-                llvm_amdgcn_raw_buffer_store_bf16(__float2bfloat16(flat[k]), srsrc, byte_offset, 0, 0);
+                int flat_offset = (token_id * TOP_K + topk_slot) * row_stride + col_offset;
+                int byte_offset = flat_offset * sizeof(T);
+                if (token_id != dst.rows()) {
+                    base_ptr[flat_offset] = __float2bfloat16(flat[k]);
+                }
             }
         }
     }
