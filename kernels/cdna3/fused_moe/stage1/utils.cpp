@@ -82,7 +82,7 @@ __device__ inline void gather_load(
             int token_id = tm_ptr[row] & 0xFFFFFF;
 
             // TODO: compare against raw_buffer_load w/ hardware supported OOB reads to avoid this conditional
-            if (token_id != src.rows()) {
+            if (row < ST::rows && token_id != src.rows()) {
                 buf[j] = load_global_vec4_async((float4*) (src_ptr + (token_id * row_stride + col)));
             }
         }
@@ -95,7 +95,7 @@ __device__ inline void gather_load(
             int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
             int token_id = tm_ptr[row] & 0xFFFFFF;
 
-            if (token_id != src.rows()) {
+            if (row < ST::rows && token_id != src.rows()) {
                 store_shared_vec(dst.idx(dst_ptr, {row, col}), {buf[j].x, buf[j].y});
                 store_shared_vec(dst.idx(dst_ptr, {row, col + elem_per_half_memcpy}), {buf[j].z, buf[j].w});
             }
@@ -208,8 +208,9 @@ __device__ inline void gather_f32_sf_a(
     for (int i = 0; i < total_calls; ++i) {
         if (laneid < SV::length) {  // one lane per row in BLOCK_M, mask out lanes that exceed this block's segment
             int token_id = tm_ptr[laneid + i * N_THREADS] & 0xFFFFFF;
-            int byte_offset = token_id * sizeof(float);
-            buf[i] = llvm_amdgcn_raw_buffer_load_f32(srsrc, byte_offset, 0, 0);
+            // int byte_offset = token_id * sizeof(float);
+            // buf[i] = (token_id != src.cols()) ? llvm_amdgcn_raw_buffer_load_f32(srsrc, byte_offset, 0, 0) : 1.0f;
+            buf[i] = (token_id != src.cols()) ? base_ptr[token_id] : 1.0f;
 
             store_shared_f32(dst.idx(dst_ptr, laneid), buf[i]);
         }
