@@ -10,8 +10,8 @@ using namespace kittens;
 
 // MoE constants
 constexpr int EXPERTS = 256;
-constexpr int D_HIDDEN = 7168;
-constexpr int D_EXPERT = 512;
+constexpr int D_MODEL = 512;
+constexpr int D_INTER = 2048;
 constexpr int TOP_K = 2;
 
 // intra-gemm constants
@@ -23,16 +23,16 @@ constexpr int REG_N = 16;
 constexpr int REG_K = 64;
 constexpr int NUM_THREADS = NUM_WARPS * WARP_THREADS;
 constexpr int WEIGHT_SWIZZLE_GRANULARITY = BLOCK_N / 2;
-constexpr size_t SMEM_BYTES = BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K;
+constexpr size_t SMEM_BYTES = BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K + BLOCK_M + WEIGHT_SWIZZLE_GRANULARITY * 2;
 static_assert(SMEM_BYTES <= 64 * 1024, "SMEM_BYTES exceeds gfx942 LDS size (64 KiB)");
 
 using out_dtype = bf16;
 using G = kittens::group<NUM_WARPS>;
-using _gl_A = gl<fp8e4m3,1,1,-1,-1>;
-using _gl_B = gl<fp8e4m3,1,-1,-1,-1>;  // [expert, d_expert * 2, d_hidden]
-using _gl_C = gl<out_dtype,1,1,-1,-1>;  // [M * topK, d_expert]
+using _gl_A = gl<fp8e4m3,1,1,-1,-1>;  // [M, d_model]
+using _gl_B = gl<fp8e4m3,1,-1,-1,-1>;  // [expert, d_inter * 2, d_model]
+using _gl_C = gl<out_dtype,1,1,-1,-1>;  // [M * topK, d_inter]
 using _gl_sf_A = gl<float,1,1,1,-1>;
-using _gl_sf_B = gl<float,1,1,-1,-1>;  // [expert, d_expert * 2]
+using _gl_sf_B = gl<float,1,1,-1,-1>;  // [expert, d_inter * 2]
 using _gl_meta = gl<int,1,1,1,-1>;
 
 struct moe_stage1_globals {
@@ -46,6 +46,7 @@ struct moe_stage1_globals {
     int num_valid_tiles;  // equivalent to (num_valid_ids[0] / BLOCK_M)
     hipStream_t stream;
 
+    dim3 grid() { return 0; }  // dummy 
     dim3 block() { return dim3(NUM_THREADS); }
     size_t dynamic_shared_memory() { return SMEM_BYTES; }
 };
@@ -69,10 +70,10 @@ void kernel(const moe_stage1_globals g) {
     
     const int warp_id = warpid();
     const int warp_row = warp_id / 4, warp_col = warp_id % 4;
-    constexpr int k_iters = D_HIDDEN / BLOCK_K;
+    constexpr int k_iters = D_MODEL / BLOCK_K;
 
     // TODO: add tile swizzling--stack intra-XCD SMs along intra-expert M-tiles first
-    const int total_tiles = g.num_valid_tiles * (2 * D_EXPERT / BLOCK_N);
+    const int total_tiles = g.num_valid_tiles * (2 * D_INTER / BLOCK_N);
     for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
         int gl_m_tile = lt % g.num_valid_tiles, n_tile = lt / g.num_valid_tiles;
         int expert = g.sorted_expert_ids[gl_m_tile];
@@ -186,9 +187,10 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        load(sf_gate, g.sf_B, {expert, n_tile});
-        load(sf_up, g.sf_B, {expert, n_tile + (D_EXPERT / WEIGHT_SWIZZLE_GRANULARITY)});
-        load(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
+        if (warp_id==0) {
+            load(sf_gate, g.sf_B, {expert, n_tile});
+            load(sf_up, g.sf_B, {expert, n_tile + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
+        }
         load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 2}));
         load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 3}));
         load(a_tiles[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
@@ -206,8 +208,6 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        load(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
-        load(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
         load(b_tiles[4], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
         load(b_tiles[5], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
         load(b_tiles[6], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 2}));
@@ -234,11 +234,13 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
+        load(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
+        load(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
+        load(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
         mul_row(accum[0], accum[0], reg_sf_A);
         mul_col(accum[0], accum[0], reg_sf_W[0]);
         mul_row(accum[1], accum[1], reg_sf_A);
         mul_col(accum[1], accum[1], reg_sf_W[1]);
-        silu(accum[0], accum[0]);
         mul(accum[0], accum[0], accum[1]);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
@@ -255,6 +257,34 @@ void call(moe_stage1_globals g) {
     hipFuncSetAttribute((void*)kernel, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
     hipDeviceProp_t prop;
     hipGetDeviceProperties(&prop, 0);
-    auto grid_dim = dim3(prop.multiProcessorCount);  // TODO: confirm this is actually in units of CUs
+    auto grid_dim = dim3(prop.multiProcessorCount);
     kernel<<<grid_dim, g.block(), mem_size, g.stream>>>(g);
+}
+
+PYBIND11_MODULE(tk_kernel, m) {
+    m.doc() = "tk_kernel python module";
+    py::bind_kernel<kernel>(
+        m,
+        "kernel",
+        &moe_stage1_globals::A,
+        &moe_stage1_globals::sf_A,
+        &moe_stage1_globals::B,
+        &moe_stage1_globals::sf_B,
+        &moe_stage1_globals::C,
+        &moe_stage1_globals::sorted_token_ids,
+        &moe_stage1_globals::sorted_expert_ids,
+        &moe_stage1_globals::num_valid_tiles
+    );
+    py::bind_function<call>(
+        m,
+        "call",
+        &moe_stage1_globals::A,
+        &moe_stage1_globals::sf_A,
+        &moe_stage1_globals::B,
+        &moe_stage1_globals::sf_B,
+        &moe_stage1_globals::C,
+        &moe_stage1_globals::sorted_token_ids,
+        &moe_stage1_globals::sorted_expert_ids,
+        &moe_stage1_globals::num_valid_tiles
+    );
 }

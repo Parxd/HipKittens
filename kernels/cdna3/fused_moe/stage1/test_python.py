@@ -1,51 +1,47 @@
 import torch
 import aiter
 from aiter.fused_moe_bf16_asm import moe_sorting_ck
-
-D_HIDDEN = 5
-D_EXPERT = 4
-SWIZZLE_GRANULARITY = 2
-
-gate_weights = torch.randn((D_EXPERT, D_HIDDEN))
-up_weights = torch.randn((D_EXPERT, D_HIDDEN))
-
-def interleave_gate_up(gate, up, granularity):
-    d_expert, d_hidden = gate.shape
-    assert d_expert % granularity == 0
-
-    # Split the D_EXPERT dim into (num_chunks, granularity)
-    gate_chunks = gate.reshape(d_expert // granularity, granularity, d_hidden)
-    up_chunks   = up.reshape(d_expert // granularity, granularity, d_hidden)
-
-    # Stack so each chunk pair is adjacent: (num_chunks, 2, granularity, d_hidden)
-    # dim=1 ordering: [gate_chunk, up_chunk] to match "[gate_0:64, up_64:128, ...]"
-    interleaved = torch.stack([gate_chunks, up_chunks], dim=1)
-
-    # Flatten back to (2 * D_EXPERT, D_HIDDEN)
-    return interleaved.reshape(2 * d_expert, d_hidden)
-
-swizzled = interleave_gate_up(gate_weights, up_weights, SWIZZLE_GRANULARITY)
-
-print(gate_weights)
-print(up_weights)
-print(swizzled)
-
-
+import tk_kernel
 
 torch.set_default_device("cuda")
 fp8_dtype = torch.float8_e4m3fnuz
 
-num_tokens = 4
-model_dim = 128
-inter_dim = 256
+num_tokens = 16
+inter_dim = 512
+model_dim = 512
 num_experts = 8
 topk = 2
+block_m = 32
 
-hidden_states = torch.randn(num_tokens, model_dim, dtype=torch.bfloat16, device="cuda")
+
+def interleave_gate_up(w_gate: torch.Tensor, w_up: torch.Tensor, block_size: int) -> torch.Tensor:
+    assert w_gate.shape == w_up.shape, "gate and up must have the same shape"
+    num_experts, inter_dim, model_dim = w_gate.shape
+    assert inter_dim % block_size == 0, "inter_dim must be divisible by block_size"
+
+    num_blocks = inter_dim // block_size
+    # Reshape into blocks: (num_experts, num_blocks, block_size, model_dim)
+    gate_blocks = w_gate.view(num_experts, num_blocks, block_size, model_dim)
+    up_blocks = w_up.view(num_experts, num_blocks, block_size, model_dim)
+    # Stack gate/up along a new axis right after num_blocks:
+    # (num_experts, num_blocks, 2, block_size, model_dim)
+    interleaved = torch.stack((gate_blocks, up_blocks), dim=2)
+    # Flatten (num_blocks, 2, block_size) -> (2 * inter_dim)
+    interleaved = interleaved.reshape(num_experts, 2 * inter_dim, model_dim)
+    return interleaved
+
+
+# hidden_states = torch.randn(num_tokens, model_dim, dtype=torch.bfloat16, device="cuda")
+hidden_states = torch.ones(num_tokens, model_dim, dtype=torch.bfloat16, device="cuda")
 hidden_states_fp8 = hidden_states.to(fp8_dtype)
 
-w1 = torch.randn(num_experts, inter_dim * 2, model_dim, dtype=torch.bfloat16, device="cuda")
-w1_fp8 = w1.to(fp8_dtype)
+# w1 = torch.randn(num_experts, inter_dim * 2, model_dim, dtype=torch.bfloat16, device="cuda")
+w1_gate = torch.ones(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda") * 2
+w1_gate_fp8 = w1_gate.to(fp8_dtype)
+w1_up = torch.ones(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda") * 3
+w1_up_fp8 = w1_up.to(fp8_dtype)
+w1_fp8 = torch.concat((w1_gate_fp8, w1_up_fp8), dim=1)
+
 w2 = torch.randn(num_experts, model_dim, inter_dim, dtype=torch.bfloat16, device="cuda")
 w2_fp8 = w2.to(fp8_dtype)
 
@@ -60,14 +56,16 @@ sorted_ids, _sorted_weights, sorted_expert_ids, num_valid_ids, _moe_buf = (
         num_experts,
         model_dim,
         torch.bfloat16,
-        block_size=32,
+        block_size=block_m,
         expert_mask=None,
     )
 )
 
 out = torch.empty((num_tokens * topk, inter_dim), dtype=torch.bfloat16, device="cuda")
-a1_scale = torch.rand(num_tokens, 1, dtype=torch.float32, device="cuda")
-w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
+# a1_scale = torch.rand(num_tokens, 1, dtype=torch.float32, device="cuda")
+a1_scale = torch.ones(num_tokens, 1, dtype=torch.float32, device="cuda")
+# w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
+w1_scale = torch.ones(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
 
 aiter.ck_moe_stage1_fwd(
     hidden_states=hidden_states_fp8,
@@ -87,8 +85,16 @@ aiter.ck_moe_stage1_fwd(
     activation=aiter.ActivationType.Swiglu
 )
 
-torch.set_printoptions(profile="full")
+# tk_kernel.call(
+#     hidden_states_fp8,
+#     a1_scale.reshape((num_tokens)),
+#     w1_fp8,
+#     w1_scale.reshape((num_experts, inter_dim * 2)),
+#     out,
+#     sorted_ids,
+#     sorted_expert_ids,
+#     num_valid_ids[0] / block_m 
+# )
 
-print(topk_ids)
-print(sorted_ids)
+torch.set_printoptions(profile="full")
 print(out)
