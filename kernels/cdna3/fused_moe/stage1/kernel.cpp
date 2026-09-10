@@ -67,8 +67,6 @@ void kernel(const moe_stage1_globals g) {
     rv_fl<REG_M, ducks::rv_layout::align> reg_sf_A;
     rv_fl<REG_N, ducks::rv_layout::ortho> reg_sf_W[2];
 
-    one(reg_sf_A);
-    
     const int warp_id = warpid();
     const int warp_row = warp_id / 4, warp_col = warp_id % 4;
     constexpr int k_iters = D_MODEL / BLOCK_K;
@@ -77,7 +75,7 @@ void kernel(const moe_stage1_globals g) {
     const int total_tiles = g.num_valid_tiles * (2 * D_INTER / BLOCK_N);
     for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
         for (int i = 0; i < 2; i++) { zero(accum[i]); }
-        zero(As); zero(Bs);
+        // zero(As); zero(Bs);
         int gl_m_tile = lt % g.num_valid_tiles, n_tile = lt / g.num_valid_tiles;
         int expert = g.sorted_expert_ids[gl_m_tile];
 
@@ -237,33 +235,14 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        load(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
-        load(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
-        load(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
-        mul_row(accum[0], accum[0], reg_sf_A);
-        mul_col(accum[0], accum[0], reg_sf_W[0]);
-        mul_row(accum[1], accum[1], reg_sf_A);
-        mul_col(accum[1], accum[1], reg_sf_W[1]);
-
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
-        if(threadIdx.x == 0 && !blockIdx.x) {
-            // printf("TID %d, frag[%d], %f\n", threadIdx.x, 0, accum[1].tiles[0][0].data[0].x);
-            // printf("TID %d, frag[%d], %f\n", threadIdx.x, 1, accum[1].tiles[0][0].data[0].y);
-            // printf("TID %d, frag[%d], %f\n", threadIdx.x, 2, accum[1].tiles[0][0].data[1].x);
-            // printf("TID %d, frag[%d], %f\n", threadIdx.x, 3, accum[1].tiles[0][0].data[1].y);
-
-            printf("%f\n", sf_A.data[0]);
-            printf("%f\n", sf_A.data[1]);
-            printf("%f\n", sf_A.data[2]);
-            printf("%f\n", sf_A.data[3]);
-
-            printf("%f\n", reg_sf_A.data[0][0].x);
-            printf("%f\n", reg_sf_A.data[0][0].y);
-            printf("%f\n", reg_sf_A.data[0][1].x);
-            printf("%f\n", reg_sf_A.data[0][1].y);
-        }
-
+        load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
+        load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
+        load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
+        // TODO: write own mul_row + mul_col maps
+        // mul_row(accum[0], accum[0], reg_sf_A);
+        // mul_col(accum[0], accum[0], reg_sf_W[0]);
+        // mul_row(accum[1], accum[1], reg_sf_A);
+        // mul_col(accum[1], accum[1], reg_sf_W[1]);
         mul(accum[0], accum[0], accum[1]);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
@@ -272,7 +251,14 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_s_barrier();
         }
 
-        // scatter_store<TOP_K>(g.C, accum[0], {0, 0, gl_m_tile * 2 + warp_row, n_tile * 4 + warp_col}, g.sorted_token_ids);
+        // if(threadIdx.x < 64 && !blockIdx.x) {
+            // printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[0].x);
+            // printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[0].y);
+            // printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[1].x);
+            // printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[1].y);
+        // }
+
+        scatter_store<TOP_K>(g.C, accum[0], {0, 0, gl_m_tile * 2 + warp_row, n_tile * 4 + warp_col}, g.sorted_token_ids);
     }
 }
 

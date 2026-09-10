@@ -208,14 +208,71 @@ __device__ inline void gather_f32_sf_a(
     for (int i = 0; i < total_calls; ++i) {
         if (laneid < SV::length) {  // one lane per row in BLOCK_M, mask out lanes that exceed this block's segment
             int token_id = tm_ptr[laneid + i * N_THREADS] & 0xFFFFFF;
-            // int byte_offset = token_id * sizeof(float);
-            // buf[i] = (token_id != src.cols()) ? llvm_amdgcn_raw_buffer_load_f32(srsrc, byte_offset, 0, 0) : 1.0f;
-            buf[i] = (token_id != src.cols()) ? base_ptr[token_id] : 1.0f;
+            int byte_offset = token_id * sizeof(float);
+            buf[i] = llvm_amdgcn_raw_buffer_load_f32(srsrc, byte_offset, 0, 0);
+            // buf[i] = (token_id != src.cols()) ? base_ptr[token_id] : 1.0f;
 
             store_shared_f32(dst.idx(dst_ptr, laneid), buf[i]);
         }
     }
     asm volatile("s_waitcnt lgkmcnt(0)");
+}
+
+/**
+ * @brief Load data from SV to RV.
+ *        - For align layout RVs, each element broadcasted to lanes across columns of 16x16 MFMA accum. tile (i.e. lanes 0-15 share same 4 elements, 16-31 share, and so on.)
+ *        - For ortho layout RVs, each element broadcasted to lanes across rows (i.e. lanes 0+16+32+48 share the same 1 element, and so on).
+ *
+ * @tparam RV The register vector type
+ * @tparam SV The shared vector type
+ * @param dst[out] The destination register vector.
+ * @param src[in]  The source shared vector.
+ */
+template<ducks::rv::all RV, ducks::sv::all SV>
+__device__ inline static void load_sv_to_rv(RV &dst, const SV &src) {
+    using T2 = RV::dtype;
+    using U = SV::dtype;
+    using U2 = base_types::packing<U>::packed_type;
+    using T = base_types::packing<T2>::unpacked_type;
+
+    static_assert(SV::length == RV::length);
+    
+    int laneid = ::kittens::laneid();
+    
+    if constexpr (std::is_same_v<typename RV::layout, align_l>) {
+        #pragma unroll
+        for(auto w = 0; w < (dst.outer_dim+3)/4; w++) {
+            int idx = w*128 + 2 * laneid;
+            int o_dim = w*4 + (laneid/8) / 2;
+            int i_dim = (laneid/8) % 2;
+            if(idx < dst.length) {
+                dst[o_dim][i_dim] = base_types::convertor<T2, U2>::convert(*(U2*)&src.data[idx]);
+            }
+        }
+        #pragma unroll
+        for (auto w = 0; w < dst.outer_dim; w++) {
+            int leader = (laneid / 16 * 2) + 8 * (w % 8);
+            T2 tmp = dst[w][w % 2];
+            dst[w][0] = packed_shfl(MASK_ALL, tmp, leader);
+            dst[w][1] = packed_shfl(MASK_ALL, tmp, leader + 1);
+        }
+    }
+    else if constexpr (std::is_same_v<typename RV::layout, ortho_l>) {
+        #pragma unroll
+        for(auto w = 0; w < (dst.outer_dim + 3) / 4; w++) {
+            int idx = 64 * w + laneid;
+            int o_dim = 4 * w + laneid / 16;
+            if (idx < dst.length) {
+                T tmp = base_types::convertor<T, U>::convert(src.data[idx]);
+                dst[o_dim][0] = tmp;
+            }
+        }
+        #pragma unroll
+        for (auto w = 0; w < dst.outer_dim; w++) {
+            int leader = laneid % 16 + 16 * w;
+            dst[w][0] = packed_shfl(MASK_ALL, dst[w][0], leader);
+        }
+    }
 }
 
 /**
