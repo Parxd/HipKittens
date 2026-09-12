@@ -239,10 +239,10 @@ void kernel(const moe_stage1_globals g) {
         load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
         load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
         // TODO: write own mul_row + mul_col maps
-        // mul_row(accum[0], accum[0], reg_sf_A);
-        // mul_col(accum[0], accum[0], reg_sf_W[0]);
-        // mul_row(accum[1], accum[1], reg_sf_A);
-        // mul_col(accum[1], accum[1], reg_sf_W[1]);
+        apply_row_sf(accum[0], accum[0], reg_sf_A);
+        apply_col_sf(accum[0], accum[0], reg_sf_W[0]);
+        apply_row_sf(accum[1], accum[1], reg_sf_A);
+        apply_col_sf(accum[1], accum[1], reg_sf_W[1]);
         mul(accum[0], accum[0], accum[1]);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);

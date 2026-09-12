@@ -276,6 +276,55 @@ __device__ inline static void load_sv_to_rv(RV &dst, const SV &src) {
 }
 
 /**
+ * Apply per-token (generally--per-row) scale factors to an accumulator tile for dequant.
+ */
+template<typename op, ducks::rt::col_layout T, ducks::rv::align_layout V>
+__device__ static inline void apply_row_sf(T &dst, const T &src, const V &row_values) {
+    using dtype = T::dtype;
+    using RT = V::dtype;
+    using RT2 = base_types::packing<RT>::packed_type;
+
+    static_assert(std::is_same_v<RT2, typename T::dtype);
+    static_assert(V::outer_dim == T::height);
+
+    #pragma unroll
+    for(int i = 0; i < dst.height; i++) {
+        RT2 packed0 = row_values[i][0];
+        RT2 packed1 = row_values[i][1];
+        #pragma unroll
+        for(int j = 0; j < dst.width; j++) {
+            dst.tiles[i][j].data[0] = base_ops::mul::op(src.tiles[i][j].data[0], packed0);
+            dst.tiles[i][j].data[1] = base_ops::mul::op(src.tiles[i][j].data[1], packed1);
+        }
+    }
+}
+
+/**
+ * Apply per-channel (generally--per-col.) scale factors to an accumulator tile for dequant.
+ */
+template<typename op, ducks::rt::col_layout T, ducks::rv::ortho_layout V>
+__device__ static inline void apply_col_sf(T& dst, const T &src, const V &col_values) {
+    using dtype = T::dtype;
+    using RT = V::dtype;
+    using RT2 = base_types::packing<RT>::packed_type;
+
+    static_assert(std::is_same_v<RT2, typename T::dtype);
+    static_assert(V::outer_dim == T::width);
+
+    #pragma unroll
+    for(int i = 0; i < dst.height; i++) {
+        #pragma unroll
+        for(int j = 0; j < dst.width; j++) {
+            RT unpacked = col_values[j][0];
+            dst.tiles[i][j].data[0].x = base_ops::mul::op(src.tiles[i][j].data[0].x, unpacked);
+            dst.tiles[i][j].data[0].y = base_ops::mul::op(src.tiles[i][j].data[0].y, unpacked);
+            dst.tiles[i][j].data[1].x = base_ops::mul::op(src.tiles[i][j].data[1].x, unpacked);
+            dst.tiles[i][j].data[1].y = base_ops::mul::op(src.tiles[i][j].data[1].y, unpacked);
+        }
+    }
+}
+
+/**
  * @brief Requires f32 source RT dtype & bf16 destination GL dtype
  *        to enable use of llvm_amdgcn_raw_buffer_store_bf16
  * @tparam TOP_K  Mixture-of-Experts Top-K parameter
