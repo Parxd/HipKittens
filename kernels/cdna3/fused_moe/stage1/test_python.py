@@ -6,8 +6,8 @@ import tk_kernel
 torch.set_default_device("cuda")
 fp8_dtype = torch.float8_e4m3fnuz
 
-num_tokens = 32
-inter_dim = 512
+num_tokens = 16
+inter_dim = 2048
 model_dim = 512
 num_experts = 8
 topk = 2
@@ -60,6 +60,7 @@ sorted_ids, _sorted_weights, sorted_expert_ids, num_valid_ids, _moe_buf = (
         expert_mask=None,
     )
 )
+torch.cuda.synchronize()
 
 out_ref = torch.empty((num_tokens * topk, inter_dim), dtype=torch.bfloat16, device="cuda")
 out_test = torch.empty((num_tokens * topk, inter_dim), dtype=torch.bfloat16, device="cuda")
@@ -77,7 +78,7 @@ w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device
 #     num_valid_ids=num_valid_ids,
 #     out=out_ref,
 #     topk=topk,
-#     kernelName="",
+#     kernelName="",w
 #     w1_scale=w1_scale,
 #     a1_scale=a1_scale,
 #     block_m=32,
@@ -97,11 +98,17 @@ tk_kernel.call(
     sorted_expert_ids,
     num_valid_ids[0] / block_m 
 )
+torch.cuda.synchronize()
+
 if 1:
     torch.set_printoptions(profile="full", sci_mode=False)
 
-    token_ids = sorted_ids[0:block_m] & 0xFFFFFF
-    print(token_ids)
-    # print((sorted_ids[0:block_m] & 0xFF000000) >> 24)
+    # print(topk_ids)
+    # print(sorted_ids[:] & 0xFFFFFF)
+    # print((sorted_ids[:] & 0xFF000000) >> 24)
     # print(hidden_states_fp8[token_ids[token_ids < num_tokens], 0:16])
+    # print(sorted_ids.numel())
+    # print(sorted_ids.shape)
+    # print(num_valid_ids)          # what moe_sorting_ck returned
+    # print(num_valid_ids[0].item() / block_m)   # what you're computing num_valid_tiles as
     # print(out_test)

@@ -9,7 +9,7 @@ using namespace kittens;
 #define SPLIT_K False
 
 // MoE constants
-constexpr int EXPERTS = 256;
+constexpr int EXPERTS = 8;
 constexpr int D_MODEL = 512;
 constexpr int D_INTER = 2048;
 constexpr int TOP_K = 2;
@@ -30,7 +30,7 @@ using out_dtype = bf16;
 using G = kittens::group<NUM_WARPS>;
 using _gl_A = gl<fp8e4m3,1,1,-1,-1>;  // [M, d_model]
 using _gl_B = gl<fp8e4m3,1,-1,-1,-1>;  // [expert, d_inter * 2, d_model]
-using _gl_C = gl<out_dtype,1,1,-1,-1>;  // [M * topK, d_inter]
+using _gl_C = gl<out_dtype,1,1,-1,-1>;  // [M * topK, d_model]
 using _gl_sf_A = gl<float,1,1,1,-1>;
 using _gl_sf_B = gl<float,1,1,-1,-1>;  // [expert, d_inter * 2]
 using _gl_meta = gl<int,1,1,1,-1>;
@@ -75,7 +75,6 @@ void kernel(const moe_stage1_globals g) {
     const int total_tiles = g.num_valid_tiles * (2 * D_INTER / BLOCK_N);
     for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
         for (int i = 0; i < 2; i++) { zero(accum[i]); }
-        // zero(As); zero(Bs);
         int gl_m_tile = lt % g.num_valid_tiles, n_tile = lt / g.num_valid_tiles;
         int expert = g.sorted_expert_ids[gl_m_tile];
 
@@ -238,7 +237,6 @@ void kernel(const moe_stage1_globals g) {
         load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
         load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
         load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
-        // TODO: write own mul_row + mul_col maps
         apply_row_sf(accum[0], accum[0], reg_sf_A);
         apply_col_sf(accum[0], accum[0], reg_sf_W[0]);
         apply_row_sf(accum[1], accum[1], reg_sf_A);
@@ -252,10 +250,10 @@ void kernel(const moe_stage1_globals g) {
         }
 
         // if(threadIdx.x < 64 && !blockIdx.x) {
-            // printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[0].x);
-            // printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[0].y);
-            // printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[1].x);
-            // printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[1].y);
+        //     printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[0].x);
+        //     printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[0].y);
+        //     printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[1].x);
+        //     printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[1].y);
         // }
 
         scatter_store<TOP_K>(g.C, accum[0], {0, 0, gl_m_tile * 2 + warp_row, n_tile * 4 + warp_col}, g.sorted_token_ids);

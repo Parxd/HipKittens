@@ -278,13 +278,13 @@ __device__ inline static void load_sv_to_rv(RV &dst, const SV &src) {
 /**
  * Apply per-token (generally--per-row) scale factors to an accumulator tile for dequant.
  */
-template<typename op, ducks::rt::col_layout T, ducks::rv::align_layout V>
+template<ducks::rt::col_layout T, ducks::rv::align_layout V>
 __device__ static inline void apply_row_sf(T &dst, const T &src, const V &row_values) {
     using dtype = T::dtype;
     using RT = V::dtype;
     using RT2 = base_types::packing<RT>::packed_type;
 
-    static_assert(std::is_same_v<RT2, typename T::dtype);
+    static_assert(std::is_same_v<RT2, typename T::dtype>);
     static_assert(V::outer_dim == T::height);
 
     #pragma unroll
@@ -302,13 +302,13 @@ __device__ static inline void apply_row_sf(T &dst, const T &src, const V &row_va
 /**
  * Apply per-channel (generally--per-col.) scale factors to an accumulator tile for dequant.
  */
-template<typename op, ducks::rt::col_layout T, ducks::rv::ortho_layout V>
+template<ducks::rt::col_layout T, ducks::rv::ortho_layout V>
 __device__ static inline void apply_col_sf(T& dst, const T &src, const V &col_values) {
     using dtype = T::dtype;
     using RT = V::dtype;
     using RT2 = base_types::packing<RT>::packed_type;
 
-    static_assert(std::is_same_v<RT2, typename T::dtype);
+    static_assert(std::is_same_v<RT2, typename T::dtype>);
     static_assert(V::outer_dim == T::width);
 
     #pragma unroll
@@ -360,6 +360,10 @@ __device__  inline void scatter_store(
     const int row_stride_bytes = row_stride * sizeof(T);
     const int total_bytes = row_stride * dst.rows() * sizeof(T);
     i32x4 srsrc = make_srsrc(base_ptr, total_bytes, row_stride_bytes);
+
+    // if (threadIdx.x == 128 && blockIdx.x == 0) {
+    //     printf("n_coord=%d\n", unit_coord.c);
+    // }
     
     #pragma unroll
     for (int i = 0; i < RT::height; ++i) {
@@ -369,12 +373,23 @@ __device__  inline void scatter_store(
             #pragma unroll
             for (int k = 0; k < 4; ++k) {
                 int row_offset = (i * 16) + (kittens::laneid() / 16 * 4) + k;
+                int phys_row = unit_coord.r + row_offset;
                 int col_offset = (j * 16) + (kittens::laneid() % 16);
                 int packed = tm_ptr[row_offset];  // no raw buffer load here b/c row_offset guaranteed to land in valid tiles
                 int token_id = packed & 0x00FFFFFF;
                 int topk_slot = (packed & 0xFF000000) >> 24;
-                int flat_offset = (token_id * TOP_K + topk_slot) * row_stride + col_offset;
+
+                // if (threadIdx.x >= 64 && threadIdx.x < 127 && !blockIdx.x) {
+                //     printf("TID: %d, frg. %d: %d\n", threadIdx.x, k, token_id);
+                // }
+                int flat_offset = (phys_row * TOP_K + topk_slot) * row_stride + col_offset;
                 int byte_offset = flat_offset * sizeof(T);
+
+                // if (threadIdx.x == 128 && blockIdx.x == 0) {
+                //     printf("TID %d: TOKEN %d, row %d\n", threadIdx.x, token_id, phys_row * TOP_K + topk_slot);
+                //     printf("col_offset = %d\n", col_offset);
+                // }
+
                 if (token_id != dst.rows()) {
                     base_ptr[flat_offset] = __float2bfloat16(flat[k]);
                 }
