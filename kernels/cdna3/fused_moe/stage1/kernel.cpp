@@ -9,9 +9,8 @@ using namespace kittens;
 #define SPLIT_K False
 
 // MoE constants
-constexpr int EXPERTS = 8;
-constexpr int D_MODEL = 512;
-constexpr int D_INTER = 2048;
+constexpr int D_INTER = 64;
+constexpr int D_MODEL = 256;
 constexpr int TOP_K = 2;
 
 // intra-gemm constants
@@ -23,7 +22,8 @@ constexpr int REG_N = 16;
 constexpr int REG_K = 64;
 constexpr int NUM_THREADS = NUM_WARPS * WARP_THREADS;
 constexpr int WEIGHT_SWIZZLE_GRANULARITY = BLOCK_N / 2;
-constexpr size_t SMEM_BYTES = BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K + BLOCK_M + WEIGHT_SWIZZLE_GRANULARITY * 2;
+constexpr size_t SMEM_BYTES = (BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K) * sizeof(fp8e4m3) + 
+                            ((BLOCK_M + WEIGHT_SWIZZLE_GRANULARITY * 2) * sizeof(float));
 static_assert(SMEM_BYTES <= 64 * 1024, "SMEM_BYTES exceeds gfx942 LDS size (64 KiB)");
 
 using out_dtype = bf16;
@@ -31,7 +31,7 @@ using G = kittens::group<NUM_WARPS>;
 using _gl_A = gl<fp8e4m3,1,1,-1,-1>;  // [M, d_model]
 using _gl_B = gl<fp8e4m3,1,-1,-1,-1>;  // [expert, d_inter * 2, d_model]
 using _gl_C = gl<out_dtype,1,1,-1,-1>;  // [M * topK, d_model]
-using _gl_sf_A = gl<float,1,1,1,-1>;
+using _gl_sf_A = gl<float,1,1,1,-1>;  // [M]
 using _gl_sf_B = gl<float,1,1,-1,-1>;  // [expert, d_inter * 2]
 using _gl_meta = gl<int,1,1,1,-1>;
 
@@ -172,38 +172,42 @@ void kernel(const moe_stage1_globals g) {
         gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {gl_m_tile}, g.sorted_token_ids);
         load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
         load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
+        load(a_tiles[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
+        load(a_tiles[3], subtile_inplace<REG_M, REG_K>(As, {warp_row, 3}));
         load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
         load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));
+        load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 2}));
+        load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 3}));
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_s_setprio(1);
         mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
-        mma_ABt(accum[0], a_tiles[0], b_tiles[1], accum[0]);
-        mma_ABt(accum[0], a_tiles[1], b_tiles[0], accum[0]);
         mma_ABt(accum[0], a_tiles[1], b_tiles[1], accum[0]);
+        mma_ABt(accum[0], a_tiles[2], b_tiles[2], accum[0]);
+        mma_ABt(accum[0], a_tiles[3], b_tiles[3], accum[0]);
         __builtin_amdgcn_s_setprio(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        if (warp_id==0) {
+        // if (warp_id==0) {
             load(sf_gate, g.sf_B, {expert, n_tile});
             load(sf_up, g.sf_B, {expert, n_tile + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
-        }
-        load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 2}));
-        load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 3}));
-        load(a_tiles[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
-        load(a_tiles[3], subtile_inplace<REG_M, REG_K>(As, {warp_row, 3}));
+        // }
+        load(b_tiles[4], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
+        load(b_tiles[5], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
+        load(b_tiles[6], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 2}));
+        load(b_tiles[7], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 3}));
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_s_setprio(1);
-        mma_ABt(accum[0], a_tiles[2], b_tiles[2], accum[0]);
-        mma_ABt(accum[0], a_tiles[2], b_tiles[3], accum[0]);
-        mma_ABt(accum[0], a_tiles[3], b_tiles[2], accum[0]);
-        mma_ABt(accum[0], a_tiles[3], b_tiles[3], accum[0]);
+        mma_ABt(accum[1], a_tiles[0], b_tiles[4], accum[1]);
+        mma_ABt(accum[1], a_tiles[1], b_tiles[5], accum[1]);
+        mma_ABt(accum[1], a_tiles[2], b_tiles[6], accum[1]);
+        mma_ABt(accum[1], a_tiles[3], b_tiles[7], accum[1]);
         __builtin_amdgcn_s_setprio(0);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
@@ -218,8 +222,6 @@ void kernel(const moe_stage1_globals g) {
         asm volatile("s_waitcnt lgkmcnt(0)");
         __builtin_amdgcn_s_setprio(1);
         mma_ABt(accum[1], a_tiles[0], b_tiles[4], accum[1]);
-        mma_ABt(accum[1], a_tiles[0], b_tiles[5], accum[1]);
-        mma_ABt(accum[1], a_tiles[1], b_tiles[4], accum[1]);
         mma_ABt(accum[1], a_tiles[1], b_tiles[5], accum[1]);
         __builtin_amdgcn_s_setprio(0);
         __builtin_amdgcn_s_barrier();
@@ -227,8 +229,6 @@ void kernel(const moe_stage1_globals g) {
 
         __builtin_amdgcn_s_setprio(1);
         mma_ABt(accum[1], a_tiles[0], b_tiles[6], accum[1]);
-        mma_ABt(accum[1], a_tiles[0], b_tiles[7], accum[1]);
-        mma_ABt(accum[1], a_tiles[1], b_tiles[6], accum[1]);
         mma_ABt(accum[1], a_tiles[1], b_tiles[7], accum[1]);
         __builtin_amdgcn_s_setprio(0);
         __builtin_amdgcn_s_barrier();
@@ -241,6 +241,7 @@ void kernel(const moe_stage1_globals g) {
         apply_col_sf(accum[0], accum[0], reg_sf_W[0]);
         apply_row_sf(accum[1], accum[1], reg_sf_A);
         apply_col_sf(accum[1], accum[1], reg_sf_W[1]);
+        // silu(accum[0], accum[0]);
         mul(accum[0], accum[0], accum[1]);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
@@ -248,14 +249,6 @@ void kernel(const moe_stage1_globals g) {
         if (warp_row == 0) {
             __builtin_amdgcn_s_barrier();
         }
-
-        // if(threadIdx.x < 64 && !blockIdx.x) {
-        //     printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[0].x);
-        //     printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[0].y);
-        //     printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[1].x);
-        //     printf("TID: %d, %f\n", threadIdx.x, accum[0].tiles[0][0].data[1].y);
-        // }
-
         scatter_store<TOP_K>(g.C, accum[0], {0, 0, gl_m_tile * 2 + warp_row, n_tile * 4 + warp_col}, g.sorted_token_ids);
     }
 }

@@ -196,7 +196,7 @@ __device__ inline void gather_f32_sf_a(
     constexpr int total_calls = (SV::length + N_THREADS - 1) / N_THREADS;
     float buf[total_calls];
     coord<> unit_coord = idx.template unit_coord<-1, 3>();
-    float* base_ptr = (float*)&src[unit_coord];
+    float* base_ptr = (float*)&src[0];  // index into dense scale factor vector only via token IDs routed to this block
     typename GL_IDX::dtype* tm_ptr = (typename GL_IDX::dtype*)&sorted_token_ids[unit_coord];
     uint32_t dst_ptr = reinterpret_cast<uintptr_t>(&dst.data[0]);
     const int laneid = threadIdx.x % N_THREADS;
