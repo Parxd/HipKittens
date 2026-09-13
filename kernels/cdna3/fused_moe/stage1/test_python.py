@@ -3,9 +3,6 @@ import aiter
 from aiter.fused_moe_bf16_asm import moe_sorting_ck
 import tk_kernel
 
-torch.set_default_device("cuda")
-fp8_dtype = torch.float8_e4m3fnuz
-
 inter_dim = 64
 model_dim = 256
 topk = 2
@@ -13,7 +10,9 @@ topk = 2
 num_tokens = 4
 num_experts = 8
 block_m = 32
-WEIGHT_SWIZZLE_GRANULARITY = 64
+block_n = 128
+WEIGHT_SWIZZLE_GRANULARITY = block_n / 2
+fp8 = torch.float8_e4m3fnuz
 
 
 def interleave_gate_up(w_gate: torch.Tensor, w_up: torch.Tensor, block_size: int) -> torch.Tensor:
@@ -35,7 +34,10 @@ def interleave_gate_up(w_gate: torch.Tensor, w_up: torch.Tensor, block_size: int
 
 # sanity checks
 debug = True
+
 if debug:
+    torch.set_printoptions(profile="full", sci_mode=False)
+
     hidden_states = torch.ones(num_tokens, model_dim, dtype=torch.bfloat16, device="cuda")
     w1_gate = torch.ones(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda")
     w1_up = torch.ones(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda")
@@ -48,11 +50,11 @@ else:
     w2 = torch.randn(num_experts, model_dim, inter_dim, dtype=torch.bfloat16, device="cuda")
     router_logits = torch.randn(num_tokens, num_experts, device="cuda")
 
-hidden_states_fp8 = hidden_states.to(fp8_dtype)
-w1_gate_fp8 = w1_gate.to(fp8_dtype)
-w1_up_fp8 = w1_up.to(fp8_dtype)
+hidden_states_fp8 = hidden_states.to(fp8)
+w1_gate_fp8 = w1_gate.to(fp8)
+w1_up_fp8 = w1_up.to(fp8)
 w1_fp8 = torch.concat((w1_gate_fp8, w1_up_fp8), dim=1)
-w2_fp8 = w2.to(fp8_dtype)
+w2_fp8 = w2.to(fp8)
 
 topk_weights, topk_ids = torch.topk(router_logits.softmax(dim=-1), k=topk, dim=-1)
 topk_ids = topk_ids.to(torch.int32)
@@ -114,9 +116,6 @@ tk_kernel.call(
 torch.cuda.synchronize()
 
 if 1:
-    torch.set_printoptions(profile="full", sci_mode=False)
     print(topk_ids)
     print(sorted_ids[:] & 0xFFFFFF)
-    # print((sorted_ids[:] & 0xFF000000) >> 24)
-    # print(hidden_states_fp8[token_ids[token_ids < num_tokens], 0:16])
-    # print(out_test)
+    print(out_test)

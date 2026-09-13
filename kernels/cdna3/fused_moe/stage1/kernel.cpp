@@ -225,7 +225,7 @@ void kernel(const moe_stage1_globals g) {
         apply_col_sf(accum[0], accum[0], reg_sf_W[0]);
         apply_row_sf(accum[1], accum[1], reg_sf_A);
         apply_col_sf(accum[1], accum[1], reg_sf_W[1]);
-        // silu(accum[0], accum[0]);
+        silu(accum[0], accum[0]);
         mul(accum[0], accum[0], accum[1]);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
