@@ -11,7 +11,7 @@ num_tokens = 4
 num_experts = 8
 block_m = 32
 block_n = 128
-WEIGHT_SWIZZLE_GRANULARITY = block_n / 2
+WEIGHT_SWIZZLE_GRANULARITY = block_n // 2
 fp8 = torch.float8_e4m3fnuz
 
 
@@ -41,9 +41,9 @@ def moe_stage1_reference(
     topk_ids: torch.Tensor,           # [M, topk] int
 ) -> torch.Tensor:
     """Correctness-only reference for the a8w8 per-token/per-channel quantized
-    fused MoE stage-1 kernel with a SwiGLU epilogue.
+    fused MoE stage-1 kernel w/ SwiGLU epilogue.
 
-    Mirrors the kernel math exactly: fp8 x fp8 matmul with fp32 accumulation,
+    fp8 x fp8 matmul with fp32 accumulation,
     per-token row dequant and per-channel column dequant, then silu(gate) * up.
     Weight scale layout matches sf_B: gate = w1_scale[:, :inter_dim],
     up = w1_scale[:, inter_dim:]. Output rows are token_id * topk + slot.
@@ -75,7 +75,7 @@ def moe_stage1_reference(
 
 
 # sanity checks
-debug = True
+debug = False
 
 if debug:
     torch.set_printoptions(profile="full", sci_mode=False)
