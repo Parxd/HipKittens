@@ -32,6 +32,66 @@ def interleave_gate_up(w_gate: torch.Tensor, w_up: torch.Tensor, block_size: int
     return interleaved
 
 
+def moe_stage1_reference(
+    activations_fp8: torch.Tensor,
+    activation_scales: torch.Tensor,
+    interleaved_weights_fp8: torch.Tensor,
+    weight_scales: torch.Tensor,
+    sorted_token_ids: torch.Tensor,
+    sorted_expert_ids: torch.Tensor,
+    num_valid_ids: torch.Tensor,
+    *,
+    topk: int,
+    block_m: int,
+    swizzle_granularity: int,
+) -> torch.Tensor:
+    """Reference for a8w8 per-token/per-channel MoE stage 1 with SwiGLU."""
+    num_tokens, model_dim = activations_fp8.shape
+    num_experts, packed_inter_dim, weight_model_dim = interleaved_weights_fp8.shape
+    assert model_dim == weight_model_dim
+    assert packed_inter_dim % 2 == 0
+    assert packed_inter_dim % (2 * swizzle_granularity) == 0
+
+    inter_dim = packed_inter_dim // 2
+    assert weight_scales.shape == (num_experts, packed_inter_dim)
+    assert activation_scales.numel() == num_tokens
+
+    num_swizzle_blocks = inter_dim // swizzle_granularity
+    weights = interleaved_weights_fp8.float().reshape(
+        num_experts, num_swizzle_blocks, 2, swizzle_granularity, model_dim
+    )
+    gate_weights = weights[:, :, 0].reshape(num_experts, inter_dim, model_dim)
+    up_weights = weights[:, :, 1].reshape(num_experts, inter_dim, model_dim)
+
+    activations = activations_fp8.float()
+    activation_scales = activation_scales.float().reshape(num_tokens)
+    weight_scales = weight_scales.float()
+    output = torch.zeros(
+        (num_tokens * topk, inter_dim), dtype=torch.float32, device=activations.device
+    )
+
+    num_valid_tiles = int(num_valid_ids.item()) // block_m
+    for tile_index in range(num_valid_tiles):
+        packed_ids = sorted_token_ids[tile_index * block_m : (tile_index + 1) * block_m]
+        token_ids = (packed_ids & 0x00FFFFFF).long()
+        topk_slots = ((packed_ids >> 24) & 0xFF).long()
+        valid = token_ids < num_tokens
+        if not valid.any():
+            continue
+
+        expert = int(sorted_expert_ids[tile_index].item())
+        token_ids = token_ids[valid]
+        dequantized_activations = activations[token_ids] * activation_scales[token_ids, None]
+        gate = dequantized_activations @ gate_weights[expert].T
+        up = dequantized_activations @ up_weights[expert].T
+        gate *= weight_scales[expert, :inter_dim]
+        up *= weight_scales[expert, inter_dim:]
+
+        output[token_ids * topk + topk_slots[valid]] = torch.nn.functional.silu(gate) * up
+
+    return output.to(torch.bfloat16)
+
+
 # sanity checks
 debug = True
 
@@ -103,6 +163,18 @@ if 0:
     torch.cuda.synchronize()
 
 interleaved = interleave_gate_up(w1_gate_fp8, w1_up_fp8, WEIGHT_SWIZZLE_GRANULARITY)
+out_ref = moe_stage1_reference(
+    hidden_states_fp8,
+    a1_scale,
+    interleaved,
+    w1_scale,
+    sorted_ids,
+    sorted_expert_ids,
+    num_valid_ids,
+    topk=topk,
+    block_m=block_m,
+    swizzle_granularity=WEIGHT_SWIZZLE_GRANULARITY,
+)
 tk_kernel.call(
     hidden_states_fp8,
     a1_scale.reshape((num_tokens)),
@@ -115,7 +187,10 @@ tk_kernel.call(
 )
 torch.cuda.synchronize()
 
+torch.testing.assert_close(out_test, out_ref, rtol=2e-2, atol=2e-2)
+
 if 1:
     print(topk_ids)
     print(sorted_ids[:] & 0xFFFFFF)
+    print(out_ref)
     print(out_test)
