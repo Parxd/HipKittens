@@ -127,6 +127,21 @@ else:
     a1_scale = torch.rand(num_tokens, 1, dtype=torch.float32, device="cuda")
     w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
 
+interleaved = interleave_gate_up(w1_gate_fp8, w1_up_fp8, WEIGHT_SWIZZLE_GRANULARITY)
+# precompute as a plain int here once so we avoid a CUDA sync here from pybind's conversion
+num_valid_tiles = int(num_valid_ids[0].item() // block_m)
+tk_kernel.call(
+    hidden_states_fp8,
+    a1_scale.reshape((num_tokens)),
+    interleaved,
+    w1_scale.reshape((num_experts, inter_dim * 2)),
+    out_test,
+    sorted_ids,
+    sorted_expert_ids,
+    num_valid_tiles
+)
+torch.cuda.synchronize()
+
 aiter.ck_moe_stage1_fwd(
     hidden_states=hidden_states_fp8,
     w1=w1_fp8_aiter,
@@ -142,20 +157,7 @@ aiter.ck_moe_stage1_fwd(
     block_m=32,
     sorted_weights=None,
     quant_type=aiter.QuantType.per_Token,
-    activation=aiter.ActivationType.Silu
-)
-torch.cuda.synchronize()
-
-interleaved = interleave_gate_up(w1_gate_fp8, w1_up_fp8, WEIGHT_SWIZZLE_GRANULARITY)
-tk_kernel.call(
-    hidden_states_fp8,
-    a1_scale.reshape((num_tokens)),
-    interleaved,
-    w1_scale.reshape((num_experts, inter_dim * 2)),
-    out_test,
-    sorted_ids,
-    sorted_expert_ids,
-    num_valid_ids[0] / block_m 
+    activation=aiter.ActivationType.Silu  # AITER swiglu uses weird GPT-OSS specific implementation
 )
 torch.cuda.synchronize()
 
@@ -185,7 +187,7 @@ if perf_benchmark:
             out_test,
             sorted_ids,
             sorted_expert_ids,
-            num_valid_ids[0] / block_m 
+            num_valid_tiles
         )
     torch.cuda.synchronize()
 
@@ -203,7 +205,7 @@ if perf_benchmark:
             out_test,
             sorted_ids,
             sorted_expert_ids,
-            num_valid_ids[0] / block_m 
+            num_valid_tiles
         )
         end.record()
         torch.cuda.synchronize()

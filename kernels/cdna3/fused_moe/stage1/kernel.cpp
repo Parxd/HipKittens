@@ -177,10 +177,10 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        // if (warp_id==0) {
+        if (warp_id==0) {
             load(sf_gate, g.sf_B, {expert, n_tile});
             load(sf_up, g.sf_B, {expert, n_tile + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
-        // }
+        }
         load(a_tiles[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
         load(a_tiles[3], subtile_inplace<REG_M, REG_K>(As, {warp_row, 3}));
         load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
