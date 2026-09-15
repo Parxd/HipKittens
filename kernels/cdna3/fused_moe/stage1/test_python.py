@@ -1,6 +1,7 @@
 import torch
 import aiter
 from aiter.fused_moe_bf16_asm import moe_sorting_ck
+from aiter.ops.shuffle import shuffle_weight
 import tk_kernel
 
 inter_dim = 512
@@ -96,6 +97,8 @@ hidden_states_fp8 = hidden_states.to(fp8)
 w1_gate_fp8 = w1_gate.to(fp8)
 w1_up_fp8 = w1_up.to(fp8)
 w1_fp8 = torch.concat((w1_gate_fp8, w1_up_fp8), dim=1)
+# CK reuqires B in MFMA-shuffled layout
+w1_fp8_aiter = shuffle_weight(w1_fp8, layout=(16, 16))
 w2_fp8 = w2.to(fp8)
 
 topk_weights, topk_ids = torch.topk(router_logits.softmax(dim=-1), k=topk, dim=-1)
@@ -124,25 +127,24 @@ else:
     a1_scale = torch.rand(num_tokens, 1, dtype=torch.float32, device="cuda")
     w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
 
-if 1:
-    aiter.ck_moe_stage1_fwd(
-        hidden_states=hidden_states_fp8,
-        w1=w1_fp8,
-        w2=w2_fp8,
-        sorted_token_ids=sorted_ids,
-        sorted_expert_ids=sorted_expert_ids,
-        num_valid_ids=num_valid_ids,
-        out=out_ref,
-        topk=topk,
-        kernelName="",
-        w1_scale=w1_scale,
-        a1_scale=a1_scale,
-        block_m=32,
-        sorted_weights=_sorted_weights,
-        quant_type=aiter.QuantType.per_Token,
-        activation=aiter.ActivationType.Swiglu
-    )
-    torch.cuda.synchronize()
+aiter.ck_moe_stage1_fwd(
+    hidden_states=hidden_states_fp8,
+    w1=w1_fp8_aiter,
+    w2=w2_fp8,
+    sorted_token_ids=sorted_ids,
+    sorted_expert_ids=sorted_expert_ids,
+    num_valid_ids=num_valid_ids,
+    out=out_ref,
+    topk=topk,
+    kernelName="",
+    w1_scale=w1_scale,
+    a1_scale=a1_scale,
+    block_m=32,
+    sorted_weights=None,
+    quant_type=aiter.QuantType.per_Token,
+    activation=aiter.ActivationType.Silu
+)
+torch.cuda.synchronize()
 
 interleaved = interleave_gate_up(w1_gate_fp8, w1_up_fp8, WEIGHT_SWIZZLE_GRANULARITY)
 tk_kernel.call(
@@ -217,7 +219,7 @@ if perf_benchmark:
         start.record()
         aiter.ck_moe_stage1_fwd(
             hidden_states=hidden_states_fp8,
-            w1=w1_fp8,
+            w1=w1_fp8_aiter,
             w2=w2_fp8,
             sorted_token_ids=sorted_ids,
             sorted_expert_ids=sorted_expert_ids,
@@ -228,9 +230,9 @@ if perf_benchmark:
             w1_scale=w1_scale,
             a1_scale=a1_scale,
             block_m=32,
-            sorted_weights=_sorted_weights,
+            sorted_weights=None,
             quant_type=aiter.QuantType.per_Token,
-            activation=aiter.ActivationType.Swiglu
+            activation=aiter.ActivationType.Silu
         )
         end.record()
         torch.cuda.synchronize()
