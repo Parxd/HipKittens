@@ -9,9 +9,9 @@ using namespace kittens;
 #define SPLIT_K False
 
 // MoE constants
-constexpr int D_INTER = 64;
-constexpr int D_MODEL = 256;
-constexpr int TOP_K = 2;
+constexpr int D_INTER = 512;
+constexpr int D_MODEL = 2048;
+constexpr int TOP_K = 8;
 
 // intra-gemm constants
 constexpr int BLOCK_M = 32;

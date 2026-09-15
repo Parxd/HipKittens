@@ -3,12 +3,12 @@ import aiter
 from aiter.fused_moe_bf16_asm import moe_sorting_ck
 import tk_kernel
 
-inter_dim = 64
-model_dim = 256
-topk = 2
+inter_dim = 512
+model_dim = 2048
+topk = 8
 
-num_tokens = 4
-num_experts = 8
+num_tokens = 32
+num_experts = 32
 block_m = 32
 block_n = 128
 WEIGHT_SWIZZLE_GRANULARITY = block_n // 2
@@ -74,8 +74,8 @@ def moe_stage1_reference(
     return act.to(torch.bfloat16)
 
 
-# sanity checks
 debug = False
+perf_benchmark = True
 
 if debug:
     torch.set_printoptions(profile="full", sci_mode=False)
@@ -124,7 +124,7 @@ else:
     a1_scale = torch.rand(num_tokens, 1, dtype=torch.float32, device="cuda")
     w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
 
-if 0:
+if 1:
     aiter.ck_moe_stage1_fwd(
         hidden_states=hidden_states_fp8,
         w1=w1_fp8,
@@ -157,21 +157,83 @@ tk_kernel.call(
 )
 torch.cuda.synchronize()
 
-out_ref = moe_stage1_reference(
-    hidden_states_fp8,
-    a1_scale.reshape((num_tokens)),
-    w1_gate_fp8,
-    w1_up_fp8,
-    w1_scale.reshape((num_experts, inter_dim * 2)),
-    topk_ids,
-)
+# out_ref = moe_stage1_reference(
+#     hidden_states_fp8,
+#     a1_scale.reshape((num_tokens)),
+#     w1_gate_fp8,
+#     w1_up_fp8,
+#     w1_scale.reshape((num_experts, inter_dim * 2)),
+#     topk_ids,
+# )
 
-if 1:
-    print(topk_ids)
-    print(sorted_ids[:] & 0xFFFFFF)
-    print("out_test:\n", out_test)
-    print("out_ref:\n", out_ref)
+# print("out_test:\n", out_test)
+# print("out_ref:\n", out_ref)
+max_abs_err = (out_test.float() - out_ref.float()).abs().max().item()
+print("max abs err:", max_abs_err)
+print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
 
-    max_abs_err = (out_test.float() - out_ref.float()).abs().max().item()
-    print("max abs err:", max_abs_err)
-    print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
+if perf_benchmark:
+    num_warmup, num_iters = 5, 20
+    for _ in range(num_warmup):
+        tk_kernel.call(
+            hidden_states_fp8,
+            a1_scale.reshape((num_tokens)),
+            interleaved,
+            w1_scale.reshape((num_experts, inter_dim * 2)),
+            out_test,
+            sorted_ids,
+            sorted_expert_ids,
+            num_valid_ids[0] / block_m 
+        )
+    torch.cuda.synchronize()
+
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    timings = []
+    for _ in range(num_iters):
+        torch.cuda.synchronize()
+        start.record()
+        tk_kernel.call(
+            hidden_states_fp8,
+            a1_scale.reshape((num_tokens)),
+            interleaved,
+            w1_scale.reshape((num_experts, inter_dim * 2)),
+            out_test,
+            sorted_ids,
+            sorted_expert_ids,
+            num_valid_ids[0] / block_m 
+        )
+        end.record()
+        torch.cuda.synchronize()
+        timings.append(start.elapsed_time(end))
+    avg = sum(timings) / len(timings)
+    print("TK perf.: ", avg)
+
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
+    timings = []
+    for _ in range(num_iters):
+        torch.cuda.synchronize()
+        start.record()
+        aiter.ck_moe_stage1_fwd(
+            hidden_states=hidden_states_fp8,
+            w1=w1_fp8,
+            w2=w2_fp8,
+            sorted_token_ids=sorted_ids,
+            sorted_expert_ids=sorted_expert_ids,
+            num_valid_ids=num_valid_ids,
+            out=out_ref,
+            topk=topk,
+            kernelName="",
+            w1_scale=w1_scale,
+            a1_scale=a1_scale,
+            block_m=32,
+            sorted_weights=_sorted_weights,
+            quant_type=aiter.QuantType.per_Token,
+            activation=aiter.ActivationType.Swiglu
+        )
+        end.record()
+        torch.cuda.synchronize()
+        timings.append(start.elapsed_time(end))
+    avg = sum(timings) / len(timings)
+    print("AITER perf.: ", avg)
