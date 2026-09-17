@@ -77,11 +77,10 @@ void kernel(const moe_stage1_globals g) {
     const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
     const int chunk_size = 1;
     const int window_size = 1;
-    // mixing gridDim.x w/ NUM_XCDS and CUS_PER_XCD here
-    // a kernel not launched with *all* CUs on *all* XCDs shouldn't use these constants
     const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
     for (int tile = 0; tile < num_tiles_per_cu && base_bidx + tile * gridDim.x < total_tiles; ++tile) {
+    // for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
         for (int i = 0; i < 2; i++) { zero(accum[i]); }
 
         const int remap_bidx = base_bidx + tile * gridDim.x;
@@ -91,6 +90,7 @@ void kernel(const moe_stage1_globals g) {
         int group_size_m = min(num_valid_m_tiles - first_pid_m, window_size);
         int output_m = first_pid_m + ((remap_bidx % num_wgid_in_group) % group_size_m);
         int output_n = (remap_bidx % num_wgid_in_group) / group_size_m;
+        // int output_m = lt % num_valid_m_tiles, output_n = lt / num_valid_m_tiles;
         int expert = g.sorted_expert_ids[output_m];
 
         // TODO: these are causing LDS conflicts...?
@@ -164,7 +164,7 @@ void kernel(const moe_stage1_globals g) {
             // Cluster 6
             asm volatile("s_waitcnt lgkmcnt(0)");
             store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
-            store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);
+            store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);  // TODO: lots of LDS conflicts here...
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 

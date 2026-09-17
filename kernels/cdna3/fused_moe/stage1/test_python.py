@@ -141,24 +141,24 @@ tk_kernel.call(
 )
 torch.cuda.synchronize()
 
-aiter.ck_moe_stage1_fwd(
-    hidden_states=hidden_states_fp8,
-    w1=w1_fp8_aiter,
-    w2=w2_fp8,
-    sorted_token_ids=sorted_ids,
-    sorted_expert_ids=sorted_expert_ids,
-    num_valid_ids=num_valid_ids,
-    out=out_ref,
-    topk=topk,
-    kernelName="",
-    w1_scale=w1_scale,
-    a1_scale=a1_scale,
-    block_m=32,
-    sorted_weights=None,
-    quant_type=aiter.QuantType.per_Token,
-    activation=aiter.ActivationType.Silu  # AITER swiglu uses weird GPT-OSS specific implementation
-)
-torch.cuda.synchronize()
+# aiter.ck_moe_stage1_fwd(
+#     hidden_states=hidden_states_fp8,
+#     w1=w1_fp8_aiter,
+#     w2=w2_fp8,
+#     sorted_token_ids=sorted_ids,
+#     sorted_expert_ids=sorted_expert_ids,
+#     num_valid_ids=num_valid_ids,
+#     out=out_ref,
+#     topk=topk,
+#     kernelName="",
+#     w1_scale=w1_scale,
+#     a1_scale=a1_scale,
+#     block_m=32,
+#     sorted_weights=None,
+#     quant_type=aiter.QuantType.per_Token,
+#     activation=aiter.ActivationType.Silu  # AITER swiglu uses weird GPT-OSS specific implementation
+# )
+# torch.cuda.synchronize()
 
 # out_ref = moe_stage1_reference(
 #     hidden_states_fp8,

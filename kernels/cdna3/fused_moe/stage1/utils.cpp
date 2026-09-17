@@ -49,7 +49,6 @@ __device__ inline void gather_load(
     using T = typename ST::dtype;
     constexpr int axis = 2;
 
-    const int row_stride = src.template stride<axis>();
     constexpr int elem_per_memcpy = sizeof(float4) / sizeof(T);
     constexpr int elem_per_half_memcpy = sizeof(float2) / sizeof(T);
     constexpr int memcpy_per_row = ST::cols / elem_per_memcpy;
