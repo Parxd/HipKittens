@@ -79,6 +79,7 @@ namespace kittens {
                     underlying_width%4 == 0 ? 64 :
                     underlying_width%2 == 0 ? 32 : 16
                 ) :
+                underlying_width%8 == 0 ? 256 :
                 underlying_width%4 == 0 ? 128 :
                 underlying_width%2 == 0 ?  64 : 32
             ) :
