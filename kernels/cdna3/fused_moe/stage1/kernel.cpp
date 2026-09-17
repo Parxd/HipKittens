@@ -43,7 +43,7 @@ struct moe_stage1_globals {
     _gl_C C;
     _gl_meta sorted_token_ids;
     _gl_meta sorted_expert_ids;
-    int num_valid_tiles;  // equivalent to (num_valid_ids[0] / BLOCK_M)
+    _gl_meta num_valid_ids;
     hipStream_t stream;
 
     dim3 grid() { return 0; }  // dummy 
@@ -71,11 +71,12 @@ void kernel(const moe_stage1_globals g) {
     const int warp_row = warp_id / 4, warp_col = warp_id % 4;
     constexpr int k_iters = D_MODEL / BLOCK_K;
 
+    int num_valid_tiles = g.num_valid_ids[0] / BLOCK_M;
     // TODO: add tile swizzling--stack intra-XCD SMs along intra-expert M-tiles first
-    const int total_tiles = g.num_valid_tiles * (2 * D_INTER / BLOCK_N);
+    const int total_tiles = num_valid_tiles * (2 * D_INTER / BLOCK_N);
     for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
         for (int i = 0; i < 2; i++) { zero(accum[i]); }
-        int gl_m_tile = lt % g.num_valid_tiles, n_tile = lt / g.num_valid_tiles;
+        int gl_m_tile = lt % num_valid_tiles, n_tile = lt / num_valid_tiles;
         int expert = g.sorted_expert_ids[gl_m_tile];
 
         gather_load<NUM_THREADS>(As, g.A, {0, 0, gl_m_tile, 0}, g.sorted_token_ids);
@@ -258,7 +259,7 @@ PYBIND11_MODULE(tk_kernel, m) {
         &moe_stage1_globals::C,
         &moe_stage1_globals::sorted_token_ids,
         &moe_stage1_globals::sorted_expert_ids,
-        &moe_stage1_globals::num_valid_tiles
+        &moe_stage1_globals::num_valid_ids
     );
     py::bind_function<call>(
         m,
@@ -270,6 +271,6 @@ PYBIND11_MODULE(tk_kernel, m) {
         &moe_stage1_globals::C,
         &moe_stage1_globals::sorted_token_ids,
         &moe_stage1_globals::sorted_expert_ids,
-        &moe_stage1_globals::num_valid_tiles
+        &moe_stage1_globals::num_valid_ids
     );
 }

@@ -128,8 +128,7 @@ else:
     w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
 
 interleaved = interleave_gate_up(w1_gate_fp8, w1_up_fp8, WEIGHT_SWIZZLE_GRANULARITY)
-# precompute as a plain int here once so we avoid a CUDA sync here from pybind's conversion
-num_valid_tiles = int(num_valid_ids[0].item() // block_m)
+
 tk_kernel.call(
     hidden_states_fp8,
     a1_scale.reshape((num_tokens)),
@@ -138,7 +137,7 @@ tk_kernel.call(
     out_test,
     sorted_ids,
     sorted_expert_ids,
-    num_valid_tiles
+    num_valid_ids
 )
 torch.cuda.synchronize()
 
@@ -177,7 +176,7 @@ print("max abs err:", max_abs_err)
 print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
 
 if perf_benchmark:
-    num_warmup, num_iters = 5, 20
+    num_warmup, num_iters = 5, 50
     for _ in range(num_warmup):
         tk_kernel.call(
             hidden_states_fp8,
@@ -187,7 +186,7 @@ if perf_benchmark:
             out_test,
             sorted_ids,
             sorted_expert_ids,
-            num_valid_tiles
+            num_valid_ids
         )
     torch.cuda.synchronize()
 
@@ -205,7 +204,7 @@ if perf_benchmark:
             out_test,
             sorted_ids,
             sorted_expert_ids,
-            num_valid_tiles
+            num_valid_ids
         )
         end.record()
         torch.cuda.synchronize()
