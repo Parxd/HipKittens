@@ -97,114 +97,63 @@ void kernel(const moe_stage1_globals g) {
         G::load(Bs, g.B, {0, expert, output_n, 0});
         __builtin_amdgcn_s_barrier();
 
-        if (warp_row == 1) {
-            __builtin_amdgcn_s_barrier();
-        }
-
         for (int K_TILE = 0; K_TILE < k_iters - 1; ++K_TILE) {
             constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K) / NUM_THREADS / sizeof(float4) / sizeof(fp8e4m3);
             constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K) / NUM_THREADS / sizeof(float4) / sizeof(fp8e4m3);
             float4 a_buffer_next[BUFFER_SIZE_A];
             float4 b_buffer_next[BUFFER_SIZE_B];
             
-            // Cluster 0
             load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, g.B, {0, expert, output_n, K_TILE + 1}, Bs);
             gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, K_TILE + 1}, g.sorted_token_ids, As);
             load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
-            load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
             load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
-            load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));
-            __builtin_amdgcn_s_barrier();
+            load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
             __builtin_amdgcn_sched_barrier(0);
 
-            // Cluster 1
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_setprio(1);
             mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
-            mma_ABt(accum[0], a_tiles[1], b_tiles[1], accum[0]);
+            mma_ABt(accum[1], a_tiles[0], b_tiles[1], accum[1]);
             __builtin_amdgcn_s_setprio(0);
-            __builtin_amdgcn_s_barrier();
-            __builtin_amdgcn_sched_barrier(0);
 
-            // Cluster 2
-            load(b_tiles[2], subtile_inplace<REG_N, REG_K>(As, {warp_row + 4, 0}));
-            load(b_tiles[3], subtile_inplace<REG_N, REG_K>(As, {warp_row + 4, 1}));
-            __builtin_amdgcn_s_barrier();
-            __builtin_amdgcn_sched_barrier(0);
+            load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
+            load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));
+            load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
 
-            // Cluster 3
-            asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_setprio(1);
-            mma_ABt(accum[1], a_tiles[0], b_tiles[2], accum[1]);
+            mma_ABt(accum[0], a_tiles[1], b_tiles[2], accum[0]);
             mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
             __builtin_amdgcn_s_setprio(0);
-            __builtin_amdgcn_s_barrier();
-            __builtin_amdgcn_sched_barrier(0);
 
-            // Cluster 6
             asm volatile("s_waitcnt lgkmcnt(0)");
+            __builtin_amdgcn_s_barrier();  // WAR: all warps done reading LDS before overwrite
             store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
             store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);
-            __builtin_amdgcn_s_barrier();
-            __builtin_amdgcn_sched_barrier(0);
+            asm volatile("s_waitcnt lgkmcnt(0)");
+            __builtin_amdgcn_s_barrier();  // RAW: new tile visible before next-iter reads
         }
+        // epilogue: final K-tile already resident in LDS (RAW barrier issued by loop)
         __builtin_amdgcn_sched_barrier(0);
         gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
-        load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
-        load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
-        load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
-        load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
-
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        __builtin_amdgcn_s_setprio(1);
-        mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
-        mma_ABt(accum[0], a_tiles[1], b_tiles[1], accum[0]);
-        __builtin_amdgcn_s_setprio(0);
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
-
-        if (warp_id==0) {
+        if (warp_id == 0) {
             load(sf_gate, g.sf_B, {expert, output_n});
             load(sf_up, g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
         }
-        load(a_tiles[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
-        load(a_tiles[3], subtile_inplace<REG_M, REG_K>(As, {warp_row, 3}));
-        load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
-        load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
-
+        load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
+        load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
+        load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));      // gate
+        load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));      // gate
+        load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));  // up
+        load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));  // up
         asm volatile("s_waitcnt lgkmcnt(0)");
+        __builtin_amdgcn_s_barrier();  // make sf_A / sf_gate / sf_up visible across warps
+
         __builtin_amdgcn_s_setprio(1);
+        mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
+        mma_ABt(accum[0], a_tiles[1], b_tiles[1], accum[0]);
         mma_ABt(accum[1], a_tiles[0], b_tiles[2], accum[1]);
         mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
         __builtin_amdgcn_s_setprio(0);
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
-
-        load(b_tiles[4], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 2}));
-        load(b_tiles[5], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 3}));
-        load(b_tiles[6], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 2}));
-        load(b_tiles[7], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 3}));
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
-
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        __builtin_amdgcn_s_setprio(1);
-        mma_ABt(accum[0], a_tiles[2], b_tiles[4], accum[0]);
-        mma_ABt(accum[0], a_tiles[3], b_tiles[5], accum[0]);
-        __builtin_amdgcn_s_setprio(0);
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
-
-        __builtin_amdgcn_s_setprio(1);
-        mma_ABt(accum[1], a_tiles[2], b_tiles[6], accum[1]);
-        mma_ABt(accum[1], a_tiles[3], b_tiles[7], accum[1]);
-        __builtin_amdgcn_s_setprio(0);
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
 
         load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
         load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
@@ -215,12 +164,7 @@ void kernel(const moe_stage1_globals g) {
         apply_col_sf(accum[1], accum[1], reg_sf_W[1]);
         silu(accum[0], accum[0]);
         mul(accum[0], accum[0], accum[1]);
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
 
-        if (warp_row == 0) {
-            __builtin_amdgcn_s_barrier();
-        }
         scatter_store<TOP_K>(g.C, accum[0], {0, 0, output_m * 2 + warp_row, output_n * 4 + warp_col}, g.sorted_token_ids);
     }
 }
