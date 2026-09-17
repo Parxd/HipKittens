@@ -50,16 +50,15 @@ __device__ inline void gather_load(
     constexpr int axis = 2;
 
     const int row_stride = src.template stride<axis>();
-    constexpr int elem_per_memcpy = sizeof(float4) / sizeof(typename ST::dtype);
-    constexpr int elem_per_half_memcpy = sizeof(float2) / sizeof(typename ST::dtype);
+    constexpr int elem_per_memcpy = sizeof(float4) / sizeof(T);
+    constexpr int elem_per_half_memcpy = sizeof(float2) / sizeof(T);
     constexpr int memcpy_per_row = ST::cols / elem_per_memcpy;
     constexpr int total_calls = (ST::cols * ST::rows + N_THREADS*elem_per_memcpy-1) / (N_THREADS*elem_per_memcpy);
 
+    const int row_stride = src.template stride<axis>();
+    const int row_stride_bytes = row_stride * sizeof(T);
     coord<> unit_coord = idx.template unit_coord<axis, 3>();
-    // coord. for token mapping, uses scaled permuted M index as column index, since it's a 1D tile
     coord<> tm_coord(0, 0, 0, unit_coord.r);
-    // already-scaled physical K index w/o permuted M index
-    // src_ptr only offset in K-axis based on BLOCK_K coord., we do our own M-axis offset based on token IDs inside load loop 
     coord<> k_coord(0, 0, 0, unit_coord.c);
 
     typename GL::dtype *src_ptr = (typename GL::dtype*)&src[k_coord];
@@ -68,40 +67,34 @@ __device__ inline void gather_load(
     uint32_t dst_ptr = reinterpret_cast<uintptr_t>(&dst.data[0]);
     const int laneid = threadIdx.x % N_THREADS;
 
-    const int small_calls = 4;  // this should vary based on batch size?
-    const int big_calls = (total_calls + small_calls - 1) / small_calls;
-    float4    buf[small_calls];
+    float4    buf[total_calls];
+    const int total_bytes = src.rows() * row_stride * sizeof(T);
+    i32x4 srsrc = make_srsrc(src_ptr, total_bytes, row_stride_bytes);
 
-    for (int i = 0; i < big_calls; i++) {
-        const int offset = i * small_calls;
-        #pragma unroll
-        for (int j = 0; j < small_calls; j++) {
-            int load_idx = (offset + j) * N_THREADS + laneid;
-            int row = load_idx / memcpy_per_row;
-            int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
-            int token_id = tm_ptr[row] & 0xFFFFFF;
-
-            // TODO: compare against raw_buffer_load w/ hardware supported OOB reads to avoid this conditional
-            if (row < ST::rows && token_id != src.rows()) {
-                buf[j] = load_global_vec4_async((float4*) (src_ptr + (token_id * row_stride + col)));
-            }
+    #pragma unroll
+    for (int i = 0; i < total_calls; i++) {
+        int load_idx = i * N_THREADS + laneid;
+        int row = load_idx / memcpy_per_row;
+        int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
+        int token_id = tm_ptr[row] & 0xFFFFFF;
+        int flat_offset = token_id * row_stride + col;
+        int byte_offset = flat_offset * sizeof(T);
+        if (row < ST::rows) {
+            __uint128_t raw = llvm_amdgcn_raw_buffer_load_b128(srsrc, byte_offset, 0, 0);
+            buf[i] = *reinterpret_cast<float4*>(&raw);
         }
-        asm volatile("s_waitcnt vmcnt(0)");
-
-        #pragma unroll
-        for(int j = 0; j < small_calls; j++) {
-            int load_idx = (offset + j) * N_THREADS + laneid;
-            int row = load_idx / memcpy_per_row;
-            int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
-            int token_id = tm_ptr[row] & 0xFFFFFF;
-
-            if (row < ST::rows && token_id != src.rows()) {
-                store_shared_vec(dst.idx(dst_ptr, {row, col}), {buf[j].x, buf[j].y});
-                store_shared_vec(dst.idx(dst_ptr, {row, col + elem_per_half_memcpy}), {buf[j].z, buf[j].w});
-            }
-        }
-        asm volatile("s_waitcnt lgkmcnt(0)");
     }
+    #pragma unroll
+    for (int i = 0; i < total_calls; i++) {
+        int load_idx = i * N_THREADS + laneid;
+        int row = load_idx / memcpy_per_row;
+        int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
+        if (row < ST::rows) {
+            store_shared_vec(dst.idx(dst_ptr, {row, col}), {buf[i].x, buf[i].y});
+            store_shared_vec(dst.idx(dst_ptr, {row, col + elem_per_half_memcpy}), {buf[i].z, buf[i].w});
+        }
+    }
+    asm volatile("s_waitcnt lgkmcnt(0)");
 }
 
 /**
