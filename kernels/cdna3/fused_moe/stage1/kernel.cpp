@@ -71,16 +71,31 @@ void kernel(const moe_stage1_globals g) {
     const int warp_row = warp_id / 4, warp_col = warp_id % 4;
     constexpr int k_iters = D_MODEL / BLOCK_K;
 
-    int num_valid_tiles = g.num_valid_ids[0] / BLOCK_M;
-    // TODO: add tile swizzling--stack intra-XCD SMs along intra-expert M-tiles first
-    const int total_tiles = num_valid_tiles * (2 * D_INTER / BLOCK_N);
-    for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
-        for (int i = 0; i < 2; i++) { zero(accum[i]); }
-        int gl_m_tile = lt % num_valid_tiles, n_tile = lt / num_valid_tiles;
-        int expert = g.sorted_expert_ids[gl_m_tile];
+    const int num_valid_m_tiles = g.num_valid_ids[0] / BLOCK_M;
+    constexpr int num_n_tiles = 2 * D_INTER / BLOCK_N;
+    const int total_tiles = num_valid_m_tiles * num_n_tiles;
+    const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
+    const int chunk_size = 1;
+    const int window_size = 1;
+    // mixing gridDim.x w/ NUM_XCDS and CUS_PER_XCD here
+    // a kernel not launched with *all* CUs on *all* XCDs shouldn't use these constants
+    const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
-        gather_load<NUM_THREADS>(As, g.A, {0, 0, gl_m_tile, 0}, g.sorted_token_ids);
-        G::load(Bs, g.B, {0, expert, n_tile, 0});
+    for (int tile = 0; tile < num_tiles_per_cu && base_bidx + tile * gridDim.x < total_tiles; ++tile) {
+        for (int i = 0; i < 2; i++) { zero(accum[i]); }
+
+        const int remap_bidx = base_bidx + tile * gridDim.x;
+        int num_wgid_in_group = window_size * num_n_tiles;
+        int group_id = remap_bidx / num_wgid_in_group;
+        int first_pid_m = group_id * window_size;
+        int group_size_m = min(num_valid_m_tiles - first_pid_m, window_size);
+        int output_m = first_pid_m + ((remap_bidx % num_wgid_in_group) % group_size_m);
+        int output_n = (remap_bidx % num_wgid_in_group) / group_size_m;
+        int expert = g.sorted_expert_ids[output_m];
+
+        // TODO: these are causing LDS conflicts...?
+        gather_load<NUM_THREADS>(As, g.A, {0, 0, output_m, 0}, g.sorted_token_ids);
+        G::load(Bs, g.B, {0, expert, output_n, 0});
         __builtin_amdgcn_s_barrier();
 
         if (warp_row == 1) {
@@ -94,7 +109,7 @@ void kernel(const moe_stage1_globals g) {
             float4 b_buffer_next[BUFFER_SIZE_B];
             
             // Cluster 0
-            load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, g.B, {0, expert, n_tile, K_TILE + 1}, Bs);
+            load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, g.B, {0, expert, output_n, K_TILE + 1}, Bs);
             load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
             load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
             load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
@@ -129,7 +144,7 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_sched_barrier(0);
 
             // Cluster 4
-            gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, gl_m_tile, K_TILE + 1}, g.sorted_token_ids, As);
+            gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, K_TILE + 1}, g.sorted_token_ids, As);
             load(b_tiles[4], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 2}));
             load(b_tiles[5], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 3}));
             load(b_tiles[6], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 2}));
@@ -162,7 +177,7 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_sched_barrier(0);
         }
         __builtin_amdgcn_sched_barrier(0);
-        gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {gl_m_tile}, g.sorted_token_ids);
+        gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
         load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
         load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
         load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
@@ -179,8 +194,8 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_sched_barrier(0);
 
         if (warp_id==0) {
-            load(sf_gate, g.sf_B, {expert, n_tile});
-            load(sf_up, g.sf_B, {expert, n_tile + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
+            load(sf_gate, g.sf_B, {expert, output_n});
+            load(sf_up, g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
         }
         load(a_tiles[2], subtile_inplace<REG_M, REG_K>(As, {warp_row, 2}));
         load(a_tiles[3], subtile_inplace<REG_M, REG_K>(As, {warp_row, 3}));
@@ -234,7 +249,7 @@ void kernel(const moe_stage1_globals g) {
         if (warp_row == 0) {
             __builtin_amdgcn_s_barrier();
         }
-        scatter_store<TOP_K>(g.C, accum[0], {0, 0, gl_m_tile * 2 + warp_row, n_tile * 4 + warp_col}, g.sorted_token_ids);
+        scatter_store<TOP_K>(g.C, accum[0], {0, 0, output_m * 2 + warp_row, output_n * 4 + warp_col}, g.sorted_token_ids);
     }
 }
 

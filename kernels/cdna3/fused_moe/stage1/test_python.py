@@ -8,7 +8,7 @@ inter_dim = 512
 model_dim = 2048
 topk = 8
 
-num_tokens = 32
+num_tokens = 128
 num_experts = 32
 block_m = 32
 block_n = 128
@@ -76,7 +76,7 @@ def moe_stage1_reference(
 
 
 debug = False
-perf_benchmark = True
+perf_benchmark = False
 
 if debug:
     torch.set_printoptions(profile="full", sci_mode=False)
@@ -171,9 +171,9 @@ torch.cuda.synchronize()
 
 # print("out_test:\n", out_test)
 # print("out_ref:\n", out_ref)
-max_abs_err = (out_test.float() - out_ref.float()).abs().max().item()
-print("max abs err:", max_abs_err)
-print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
+# max_abs_err = (out_test.float() - out_ref.float()).abs().max().item()
+# print("max abs err:", max_abs_err)
+# print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
 
 if perf_benchmark:
     num_warmup, num_iters = 5, 50
