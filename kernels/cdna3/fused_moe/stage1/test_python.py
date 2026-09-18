@@ -176,7 +176,7 @@ print("max abs err:", max_abs_err)
 print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
 
 if perf_benchmark:
-    num_warmup, num_iters = 5, 50
+    num_warmup, num_iters = 5, 100
     for _ in range(num_warmup):
         tk_kernel.call(
             hidden_states_fp8,
@@ -192,10 +192,9 @@ if perf_benchmark:
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
-    timings = []
+    torch.cuda.synchronize()
+    start.record()
     for _ in range(num_iters):
-        torch.cuda.synchronize()
-        start.record()
         tk_kernel.call(
             hidden_states_fp8,
             a1_scale.reshape((num_tokens)),
@@ -206,18 +205,16 @@ if perf_benchmark:
             sorted_expert_ids,
             num_valid_ids
         )
-        end.record()
-        torch.cuda.synchronize()
-        timings.append(start.elapsed_time(end))
-    avg = sum(timings) / len(timings)
+    end.record()
+    torch.cuda.synchronize()
+    avg = start.elapsed_time(end) / num_iters
     print("TK perf.: ", avg)
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
-    timings = []
+    torch.cuda.synchronize()
+    start.record()
     for _ in range(num_iters):
-        torch.cuda.synchronize()
-        start.record()
         aiter.ck_moe_stage1_fwd(
             hidden_states=hidden_states_fp8,
             w1=w1_fp8_aiter,
@@ -235,8 +232,7 @@ if perf_benchmark:
             quant_type=aiter.QuantType.per_Token,
             activation=aiter.ActivationType.Silu
         )
-        end.record()
-        torch.cuda.synchronize()
-        timings.append(start.elapsed_time(end))
-    avg = sum(timings) / len(timings)
+    end.record()
+    torch.cuda.synchronize()
+    avg = start.elapsed_time(end) / num_iters
     print("AITER perf.: ", avg)
