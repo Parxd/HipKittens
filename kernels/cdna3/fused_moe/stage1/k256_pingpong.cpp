@@ -93,7 +93,6 @@ void kernel(const moe_stage1_globals g) {
         // int output_m = lt % num_valid_m_tiles, output_n = lt / num_valid_m_tiles;
         int expert = g.sorted_expert_ids[output_m];
 
-        // TODO: these are causing LDS conflicts...?
         gather_load<NUM_THREADS>(As, g.A, {0, 0, output_m, 0}, g.sorted_token_ids);
         G::load(Bs, g.B, {0, expert, output_n, 0});
         __builtin_amdgcn_s_barrier();
@@ -164,7 +163,7 @@ void kernel(const moe_stage1_globals g) {
             // Cluster 6
             asm volatile("s_waitcnt lgkmcnt(0)");
             store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
-            store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);  // TODO: lots of LDS conflicts here...
+            store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 

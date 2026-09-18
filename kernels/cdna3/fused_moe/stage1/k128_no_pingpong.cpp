@@ -24,7 +24,8 @@ constexpr int NUM_THREADS = NUM_WARPS * WARP_THREADS;
 constexpr int WEIGHT_SWIZZLE_GRANULARITY = BLOCK_N / 2;
 constexpr size_t SMEM_BYTES = (BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K) * sizeof(fp8e4m3) + 
                             ((BLOCK_M + WEIGHT_SWIZZLE_GRANULARITY * 2) * sizeof(float));
-static_assert(SMEM_BYTES <= 64 * 1024, "SMEM_BYTES exceeds gfx942 LDS size (64 KiB)");
+constexpr int OCCUPANCY = 2;  // persistent CTAs/CU targeted by __launch_bounds__ below
+static_assert(SMEM_BYTES * OCCUPANCY <= 64 * 1024, "SMEM_BYTES * OCCUPANCY exceeds gfx942 LDS size (64 KiB)");
 
 using out_dtype = bf16;
 using G = kittens::group<NUM_WARPS>;
@@ -51,7 +52,7 @@ struct moe_stage1_globals {
     size_t dynamic_shared_memory() { return SMEM_BYTES; }
 };
 
-__global__ __launch_bounds__(NUM_THREADS, 2)
+__global__ __launch_bounds__(NUM_THREADS, 4)
 void kernel(const moe_stage1_globals g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
@@ -75,8 +76,8 @@ void kernel(const moe_stage1_globals g) {
     constexpr int num_n_tiles = 2 * D_INTER / BLOCK_N;
     const int total_tiles = num_valid_m_tiles * num_n_tiles;
     const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
-    const int chunk_size = 1;
-    const int window_size = 1;
+    const int chunk_size = 16;
+    const int window_size = 4;
     const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
     for (int tile = 0; tile < num_tiles_per_cu && base_bidx + tile * gridDim.x < total_tiles; ++tile) {
@@ -98,8 +99,9 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
 
         for (int K_TILE = 0; K_TILE < k_iters - 1; ++K_TILE) {
-            constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K) / NUM_THREADS / sizeof(float4) / sizeof(fp8e4m3);
-            constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K) / NUM_THREADS / sizeof(float4) / sizeof(fp8e4m3);
+            constexpr int BYTES_PER_MEMCPY = NUM_THREADS * sizeof(float4) / sizeof(fp8e4m3);
+            constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
+            constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
             float4 a_buffer_next[BUFFER_SIZE_A];
             float4 b_buffer_next[BUFFER_SIZE_B];
             
@@ -120,19 +122,19 @@ void kernel(const moe_stage1_globals g) {
             load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));
             load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
 
+            asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_setprio(1);
             mma_ABt(accum[0], a_tiles[1], b_tiles[2], accum[0]);
             mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
             __builtin_amdgcn_s_setprio(0);
 
             asm volatile("s_waitcnt lgkmcnt(0)");
-            __builtin_amdgcn_s_barrier();  // WAR: all warps done reading LDS before overwrite
+            __builtin_amdgcn_s_barrier();
             store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
             store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);
             asm volatile("s_waitcnt lgkmcnt(0)");
-            __builtin_amdgcn_s_barrier();  // RAW: new tile visible before next-iter reads
+            __builtin_amdgcn_s_barrier();
         }
-        // epilogue: final K-tile already resident in LDS (RAW barrier issued by loop)
         __builtin_amdgcn_sched_barrier(0);
         gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
         if (warp_id == 0) {
@@ -146,7 +148,7 @@ void kernel(const moe_stage1_globals g) {
         load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));  // up
         load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));  // up
         asm volatile("s_waitcnt lgkmcnt(0)");
-        __builtin_amdgcn_s_barrier();  // make sf_A / sf_gate / sf_up visible across warps
+        __builtin_amdgcn_s_barrier();  // for block-wide visibility of scale factors
 
         __builtin_amdgcn_s_setprio(1);
         mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
@@ -174,7 +176,7 @@ void call(moe_stage1_globals g) {
     hipFuncSetAttribute((void*)kernel, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
     hipDeviceProp_t prop;
     hipGetDeviceProperties(&prop, 0);
-    auto grid_dim = dim3(prop.multiProcessorCount);
+    auto grid_dim = dim3(OCCUPANCY * prop.multiProcessorCount);
     kernel<<<grid_dim, g.block(), mem_size, g.stream>>>(g);
 }
 
