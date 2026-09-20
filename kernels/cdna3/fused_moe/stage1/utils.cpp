@@ -17,8 +17,9 @@ __device__ inline void store_shared_f32(uint32_t lds_off, float val) {
 
 /**
  * @brief Loads token IDs and corresponding Top-K slot from permuted+sorted token mapping array.
- *        Assumes that subsequent functions that actually load activations matrix also maps lanes to 
- *        data in a simple row-major fashion (i.e. lanes vary fastest along columns).
+ *        Assumes that subsequent functions that actually load activations matrix also map lanes to 
+ *        data in a simple row-major fashion (i.e. lanes vary fastest along columns) AND no lane is
+ *        mapped to the same token more than once (i.e. memcpy_per_row <= N_THREADS)
  *
  * @tparam N_THREADS            The number of threads used.
  * @param dst[out]              Register buffer to hold token metadata.
@@ -27,15 +28,17 @@ __device__ inline void store_shared_f32(uint32_t lds_off, float val) {
  *                              corresponding bit-packed int, which encodes the token index in 
  *                              src. in the lower 24-bits, and its top-K slot in the upper 8.
  *                              Padding tokens are marked as M, as valid tokens range from [0, M - 1].
- * @param idx[in]               Coordinate of this block's assigned tile. Column coord. is ignored
+ * @param idx[in]               Coordinate of this block's assigned tile. N-coord. is ignored
  *                              since only M-coord is needed for tokens.
+ * @param st[in]                Shared tile for activations matrix; only used for its shape to compute
+ *                              thread-value mappings.
  */
 template<int N_THREADS,
         ducks::gl::all GL,
         ducks::st::all ST,
         ducks::coord::tile COORD=coord<ST>
 >
-__device__ inline void gather_tokens(int* dst, GL& sorted_token_ids, const COORD& idx, ST& st) {
+__device__ inline void gather_tokens(int* dst, const GL& sorted_token_ids, const COORD& idx, const ST& st) {
     using T = typename ST::dtype;
     constexpr int axis = 2;
 
@@ -51,7 +54,6 @@ __device__ inline void gather_tokens(int* dst, GL& sorted_token_ids, const COORD
     for (int i = 0; i < total_calls; ++i) {
         int load_idx = i * N_THREADS + laneid;
         int row = load_idx / memcpy_per_row;
-        int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
 
         int packed = tm_ptr[row];
         dst[i] = packed & 0x00FFFFFF;
@@ -63,28 +65,19 @@ __device__ inline void gather_tokens(int* dst, GL& sorted_token_ids, const COORD
  * @brief Gathers non-contiguous rows from a global tile into a shared tile selected by a mapping.
  *
  * @tparam N_THREADS  The number of threads used.
- * @tparam ST         The shared tile type.
- * @tparam GL         The global tile type for the physical activations matrix.
- * @tparam GL_IDX     The global tile type for the token mappings array.
- * @tparam COORD      Coord type.
  * @param dst[out]    The destination shared tile.
  * @param src[in]     The source global tensor (unpermuted activations), shape [M, d_hidden].
  * @param idx[in]     Tile coordinate (m_tile, k_tile): m_tile is the M-tile index into the
  *                    PERMUTED row space; k_tile is the column-block index into src's actual K axis.
- * @param sorted_token_ids[in]  Array mapping each permuted-space row index to its
- *                              corresponding bit-packed int, which encodes the token index in 
- *                              src. in the lower 24-bits, and its top-K slot in the upper 8.
- *                              Padding tokens are marked as M, as valid tokens range from [0, M - 1].
- *                              Only reads indices [m_tile * BLOCK_M, m_tile * 2 * BLOCK_M).
+ * @param token_array[in]  
  */
 template<int N_THREADS,
         ducks::st::all ST,
         ducks::gl::all GL,
-        ducks::gl::all GL_IDX,
         ducks::coord::tile COORD = coord<ST>
 >
 __device__ inline void gather_load(
-    ST& dst, const GL& src, const COORD& idx, const GL_IDX& sorted_token_ids
+    ST& dst, const GL& src, const COORD& idx, const int* token_array
 ) {
     using T = typename ST::dtype;
     constexpr int axis = 2;
@@ -97,12 +90,9 @@ __device__ inline void gather_load(
     const int row_stride = src.template stride<axis>();
     const int row_stride_bytes = row_stride * sizeof(T);
     coord<> unit_coord = idx.template unit_coord<axis, 3>();
-    coord<> tm_coord(0, 0, 0, unit_coord.r);
     coord<> k_coord(0, 0, 0, unit_coord.c);
 
     typename GL::dtype *src_ptr = (typename GL::dtype*)&src[k_coord];
-    typename GL_IDX::dtype *tm_ptr = (typename GL_IDX::dtype*)&sorted_token_ids[tm_coord];
-
     uint32_t dst_ptr = reinterpret_cast<uintptr_t>(&dst.data[0]);
     const int laneid = threadIdx.x % N_THREADS;
 
@@ -115,7 +105,7 @@ __device__ inline void gather_load(
         int load_idx = i * N_THREADS + laneid;
         int row = load_idx / memcpy_per_row;
         int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
-        int token_id = tm_ptr[row] & 0xFFFFFF;
+        int token_id = token_array[i];
         int flat_offset = token_id * row_stride + col;
         int byte_offset = flat_offset * sizeof(T);
         if (row < ST::rows) {
@@ -140,20 +130,12 @@ __device__ inline void gather_load(
  * @brief Gathers non-contiguous rows from a global tile into register buffers selected by a mapping.
  *
  * @tparam N_THREADS  The number of threads used.
- * @tparam ST The shared tile type.
- * @tparam GL The global tile type for the physical activations matrix.
- * @tparam GL_IDX The global tile type for the token mappings array.
- * @tparam COORD Coord type.
  * @param reg_buffer[out]  The destination register buffers.
  * @param buffer_size[in]  Size of register buffers, in units of float4's (i.e. 128-bits)
  * @param src[in]   The source global tensor (unpermuted activations), shape [M, d_hidden].
  * @param idx[in]   Tile coordinate (m_tile, k_tile): m_tile is the M-tile index into the
  *                  PERMUTED row space; k_tile is the column-block index into src's actual K axis.
- * @param sorted_token_ids[in]  Array mapping each permuted-space row index to its
- *                              corresponding bit-packed int, which encodes the token index in 
- *                              src. in the lower 24-bits, and its top-K slot in the upper 8.
- *                              Padding tokens are marked as M, as valid tokens range from [0, M - 1].
- *                              Only reads indices [m_tile * BLOCK_M, m_tile * 2 * BLOCK_M).
+ * @param token_array[in]  
  */
 template<int N_THREADS,
         ducks::st::all ST, 
@@ -162,7 +144,7 @@ template<int N_THREADS,
         ducks::coord::tile COORD = coord<ST>
 >
 __device__ inline void gather_load_global_to_register_buffer(
-    float4* reg_buffer, const int buffer_size, const GL& src, const COORD& idx, const GL_IDX& sorted_token_ids, const ST& dst_template
+    float4* reg_buffer, const int buffer_size, const GL& src, const COORD& idx, const int* token_array, const ST& dst_template
 ) {
     using T = typename ST::dtype;
     constexpr int axis = 2;
@@ -177,10 +159,8 @@ __device__ inline void gather_load_global_to_register_buffer(
     const int row_stride = src.template stride<axis>();
     const int row_stride_bytes = row_stride * sizeof(T);
     coord<> unit_coord = idx.template unit_coord<axis, 3>();
-    coord<> tm_coord(0, 0, 0, unit_coord.r);
     coord<> k_coord(0, 0, 0, unit_coord.c);
     T* base_ptr = (T*)&src[k_coord];
-    typename GL_IDX::dtype *tm_ptr = (typename GL_IDX::dtype*)&sorted_token_ids[tm_coord];
     const int laneid = threadIdx.x % N_THREADS;
 
     const int total_bytes = row_stride * src.rows() * sizeof(T);
@@ -195,7 +175,7 @@ __device__ inline void gather_load_global_to_register_buffer(
             if (chunk_idx < total_chunks && buf_idx < buffer_size) {
                 int row = chunk_idx / memcpy_per_row;
                 int col = (chunk_idx % memcpy_per_row) * elem_per_memcpy;
-                int token_id = tm_ptr[row] & 0xFFFFFF;
+                int token_id = token_array[buf_idx];
                 int flat_offset = token_id * row_stride + col;
                 int byte_offset = flat_offset * sizeof(T);
                 __uint128_t raw = llvm_amdgcn_raw_buffer_load_b128(srsrc, byte_offset, 0, 0);
@@ -210,9 +190,9 @@ __device__ inline void gather_load_global_to_register_buffer(
  * @brief Gathers PT (per-token) f32 scale factors.
  *
  * @tparam N_THREADS  The number of threads used.
- * @param dst[out]  Destination shared vector.
- * @param src[in]  The source global tile.
- * @param idx[in]  Coord. of [m_tile_index]
+ * @param dst[out]    Destination shared vector.
+ * @param src[in]     The source global tile.
+ * @param idx[in]     Coord. of [m_tile_index]
  * @param sorted_token_ids[in]  
  */
 template<int N_THREADS,
@@ -254,11 +234,9 @@ __device__ inline void gather_f32_sf_a(
  * @brief Load data from SV to RV.
  *        - For align layout RVs, each element broadcasted to lanes across columns of 16x16 MFMA accum. tile (i.e. lanes 0-15 share same 4 elements, 16-31 share, and so on.)
  *        - For ortho layout RVs, each element broadcasted to lanes across rows (i.e. lanes 0+16+32+48 share the same 1 element, and so on).
- *
- * @tparam RV The register vector type
- * @tparam SV The shared vector type
- * @param dst[out] The destination register vector.
- * @param src[in]  The source shared vector.
+ * 
+ * @param dst[out]  The destination register vector.
+ * @param src[in]   The source shared vector.
  */
 template<ducks::rv::all RV, ducks::sv::all SV>
 __device__ inline static void load_sv_to_rv(RV &dst, const SV &src) {
@@ -308,7 +286,7 @@ __device__ inline static void load_sv_to_rv(RV &dst, const SV &src) {
 }
 
 /**
- * Apply per-token (generally--per-row) scale factors to an accumulator tile for dequant.
+ * @brief Apply per-token (generally--per-row) scale factors to an accumulator tile for dequant.
  */
 template<ducks::rt::col_layout T, ducks::rv::align_layout V>
 __device__ static inline void apply_row_sf(T &dst, const T &src, const V &row_values) {
@@ -332,7 +310,7 @@ __device__ static inline void apply_row_sf(T &dst, const T &src, const V &row_va
 }
 
 /**
- * Apply per-channel (generally--per-col.) scale factors to an accumulator tile for dequant.
+ * @brief Apply per-channel (generally--per-col.) scale factors to an accumulator tile for dequant.
  */
 template<ducks::rt::col_layout T, ducks::rv::ortho_layout V>
 __device__ static inline void apply_col_sf(T& dst, const T &src, const V &col_values) {
@@ -357,17 +335,12 @@ __device__ static inline void apply_col_sf(T& dst, const T &src, const V &col_va
 }
 
 /**
- * @brief Requires f32 source RT dtype & bf16 destination GL dtype
- *        to enable use of llvm_amdgcn_raw_buffer_store_bf16
- * @tparam TOP_K  Mixture-of-Experts Top-K parameter
+ * @brief 
+ * 
+ * @tparam TOP_K    Mixture-of-Experts Top-K parameter
  * @param dst[out]  Destination global tile
- * @param src[in]  Source register tile
- * @param idx[in]  Coord. of warp's register tile
- * @param sorted_token_ids[in]  Array mapping each permuted-space row index to its
- *                              corresponding bit-packed int, which encodes the token index in 
- *                              src. in the lower 24-bits, and its top-K slot in the upper 8.
- *                              Padding tokens are marked as M, as valid tokens range from [0, M - 1].
- *                              Only reads indices [m_tile * BLOCK_M, m_tile * 2 * BLOCK_M).
+ * @param src[in]   Source register tile
+ * @param idx[in]   Coord. of warp's register tile
  */
 template<int TOP_K,
         ducks::rt::all RT,
