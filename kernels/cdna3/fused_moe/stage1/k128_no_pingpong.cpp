@@ -10,7 +10,7 @@ using namespace kittens;
 
 // MoE constants
 constexpr int D_INTER = 512;
-constexpr int D_MODEL = 2048;
+constexpr int D_MODEL = 7168;
 constexpr int TOP_K = 8;
 
 // intra-gemm constants
@@ -76,7 +76,7 @@ void kernel(const moe_stage1_globals g) {
     constexpr int num_n_tiles = 2 * D_INTER / BLOCK_N;
     const int total_tiles = num_valid_m_tiles * num_n_tiles;
     const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
-    const int chunk_size = 1;
+    const int chunk_size = 4;
     const int window_size = 1;
     const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
@@ -102,20 +102,20 @@ void kernel(const moe_stage1_globals g) {
         float4 b_buffer_next[BUFFER_SIZE_B];
 
         gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As);
-        gather_load<NUM_THREADS>(As, g.A, {0, 0, output_m, 0}, g.sorted_token_ids);
+        gather_load<NUM_THREADS>(As, g.A, {0, 0, output_m, 0}, tokens);
         G::load(Bs, g.B, {0, expert, output_n, 0});
         __builtin_amdgcn_s_barrier();
 
         for (int K_TILE = 0; K_TILE < k_iters - 1; ++K_TILE) {
             load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, g.B, {0, expert, output_n, K_TILE + 1}, Bs);
-            gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, K_TILE + 1}, g.sorted_token_ids, As);
+            gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, K_TILE + 1}, tokens, As);
             load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
             load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
             load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
             __builtin_amdgcn_sched_barrier(0);
 
             asm volatile("s_waitcnt lgkmcnt(0)");
-            __builtin_amdgcn_set_prio(1);  // TODO: profile these
+            __builtin_amdgcn_s_setprio(1);
             load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
             load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));
             load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
@@ -124,7 +124,7 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_sched_barrier(0);
 
             asm volatile("s_waitcnt lgkmcnt(0)");
-            __builtin_amdgcn_set_prio(0);  // TODO: profile these
+            __builtin_amdgcn_s_setprio(0);
             mma_ABt(accum[0], a_tiles[1], b_tiles[2], accum[0]);
             mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
             __builtin_amdgcn_sched_barrier(0);
@@ -137,8 +137,9 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_sched_barrier(0);
         }
         __builtin_amdgcn_sched_barrier(0);
-        gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
+        // gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
         if (warp_id == 0) {
+            gather_f32_sf_a<WARP_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
             load(sf_gate, g.sf_B, {expert, output_n});
             load(sf_up, g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
         }

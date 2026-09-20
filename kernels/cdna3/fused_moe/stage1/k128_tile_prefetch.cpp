@@ -145,7 +145,6 @@ void kernel(const moe_stage1_globals g) {
             mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
             __builtin_amdgcn_s_setprio(0);
 
-            asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_barrier();
             store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
             store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);
@@ -177,7 +176,6 @@ void kernel(const moe_stage1_globals g) {
         load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));  // up
         load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));  // up
         asm volatile("s_waitcnt lgkmcnt(0)");
-        __builtin_amdgcn_s_barrier();  // for block-wide visibility of scale factors
 
         __builtin_amdgcn_s_setprio(1);
         mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
@@ -186,6 +184,7 @@ void kernel(const moe_stage1_globals g) {
         mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
         __builtin_amdgcn_s_setprio(0);
 
+        __builtin_amdgcn_s_barrier();  // for block-wide visibility of scale factors
         load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
         load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
         load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
