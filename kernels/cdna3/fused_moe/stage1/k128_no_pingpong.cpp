@@ -94,17 +94,19 @@ void kernel(const moe_stage1_globals g) {
         // int output_m = lt % num_valid_m_tiles, output_n = lt / num_valid_m_tiles;
         int expert = g.sorted_expert_ids[output_m];
 
+        constexpr int BYTES_PER_MEMCPY = NUM_THREADS * sizeof(float4) / sizeof(fp8e4m3);  // equivalent to tokens per lane
+        constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
+        constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
+        int tokens[BYTES_PER_MEMCPY * 2];  // token + top-k slot
+        float4 a_buffer_next[BUFFER_SIZE_A];
+        float4 b_buffer_next[BUFFER_SIZE_B];
+
+        gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As);
         gather_load<NUM_THREADS>(As, g.A, {0, 0, output_m, 0}, g.sorted_token_ids);
         G::load(Bs, g.B, {0, expert, output_n, 0});
         __builtin_amdgcn_s_barrier();
 
         for (int K_TILE = 0; K_TILE < k_iters - 1; ++K_TILE) {
-            constexpr int BYTES_PER_MEMCPY = NUM_THREADS * sizeof(float4) / sizeof(fp8e4m3);
-            constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
-            constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
-            float4 a_buffer_next[BUFFER_SIZE_A];
-            float4 b_buffer_next[BUFFER_SIZE_B];
-            
             load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, g.B, {0, expert, output_n, K_TILE + 1}, Bs);
             gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, K_TILE + 1}, g.sorted_token_ids, As);
             load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
@@ -113,27 +115,26 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_sched_barrier(0);
 
             asm volatile("s_waitcnt lgkmcnt(0)");
-            __builtin_amdgcn_s_setprio(1);
-            mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
-            mma_ABt(accum[1], a_tiles[0], b_tiles[1], accum[1]);
-            __builtin_amdgcn_s_setprio(0);
-
+            __builtin_amdgcn_set_prio(1);  // TODO: profile these
             load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
             load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));
             load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));
+            mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
+            mma_ABt(accum[1], a_tiles[0], b_tiles[1], accum[1]);
+            __builtin_amdgcn_sched_barrier(0);
 
             asm volatile("s_waitcnt lgkmcnt(0)");
-            __builtin_amdgcn_s_setprio(1);
+            __builtin_amdgcn_set_prio(0);  // TODO: profile these
             mma_ABt(accum[0], a_tiles[1], b_tiles[2], accum[0]);
             mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
-            __builtin_amdgcn_s_setprio(0);
+            __builtin_amdgcn_sched_barrier(0);
 
-            asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_barrier();
             store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
             store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_barrier();
+            __builtin_amdgcn_sched_barrier(0);
         }
         __builtin_amdgcn_sched_barrier(0);
         gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
@@ -148,7 +149,6 @@ void kernel(const moe_stage1_globals g) {
         load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));  // up
         load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 1}));  // up
         asm volatile("s_waitcnt lgkmcnt(0)");
-        __builtin_amdgcn_s_barrier();  // for block-wide visibility of scale factors
 
         __builtin_amdgcn_s_setprio(1);
         mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
@@ -156,7 +156,8 @@ void kernel(const moe_stage1_globals g) {
         mma_ABt(accum[1], a_tiles[0], b_tiles[2], accum[1]);
         mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
         __builtin_amdgcn_s_setprio(0);
-
+        
+        __builtin_amdgcn_s_barrier();  // for scale factors
         load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
         load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
         load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));

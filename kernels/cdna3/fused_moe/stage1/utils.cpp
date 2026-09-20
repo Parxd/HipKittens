@@ -3,10 +3,6 @@
 using namespace kittens;
 
 extern "C" __device__ inline float
-llvm_amdgcn_raw_buffer_store_bf16(bf16 reg, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
-    __asm("llvm.amdgcn.raw.buffer.store.bf16");
-
-extern "C" __device__ inline float
 llvm_amdgcn_raw_buffer_load_f32(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
     __asm("llvm.amdgcn.raw.buffer.load.f32");
 
@@ -20,17 +16,61 @@ __device__ inline void store_shared_f32(uint32_t lds_off, float val) {
 }
 
 /**
+ * @brief Loads token IDs and corresponding Top-K slot from permuted+sorted token mapping array.
+ *        Assumes that subsequent functions that actually load activations matrix also maps lanes to 
+ *        data in a simple row-major fashion (i.e. lanes vary fastest along columns).
+ *
+ * @tparam N_THREADS            The number of threads used.
+ * @param dst[out]              Register buffer to hold token metadata.
+ *                              Organized as: [TokenID_0, TopK_0, TokenID_1, TopK_1, ...]
+ * @param sorted_token_ids[in]  Array mapping each permuted-space row index to its
+ *                              corresponding bit-packed int, which encodes the token index in 
+ *                              src. in the lower 24-bits, and its top-K slot in the upper 8.
+ *                              Padding tokens are marked as M, as valid tokens range from [0, M - 1].
+ * @param idx[in]               Coordinate of this block's assigned tile. Column coord. is ignored
+ *                              since only M-coord is needed for tokens.
+ */
+template<int N_THREADS,
+        ducks::gl::all GL,
+        ducks::st::all ST,
+        ducks::coord::tile COORD=coord<ST>
+>
+__device__ inline void gather_tokens(int* dst, GL& sorted_token_ids, const COORD& idx, ST& st) {
+    using T = typename ST::dtype;
+    constexpr int axis = 2;
+
+    constexpr int elem_per_memcpy = sizeof(float4) / sizeof(T);
+    constexpr int total_calls = (ST::cols * ST::rows + N_THREADS*elem_per_memcpy-1) / (N_THREADS*elem_per_memcpy);
+    constexpr int memcpy_per_row = ST::cols / elem_per_memcpy;
+
+    coord<> unit_coord = idx.template unit_coord<axis, 3>();
+    coord<> tm_coord(0, 0, 0, unit_coord.r);
+    typename GL_IDX::dtype *tm_ptr = (typename GL_IDX::dtype*)&sorted_token_ids[tm_coord];
+
+    #pragma unroll
+    for (int i = 0; i < total_calls; ++i) {
+        int load_idx = i * N_THREADS + laneid;
+        int row = load_idx / memcpy_per_row;
+        int col = (load_idx % memcpy_per_row) * elem_per_memcpy;
+
+        int packed = tm_ptr[row];
+        dst[i] = packed & 0x00FFFFFF;
+        dst[i + 1] = (packed & 0xFF000000) >> 24;
+    }
+}
+
+/**
  * @brief Gathers non-contiguous rows from a global tile into a shared tile selected by a mapping.
  *
  * @tparam N_THREADS  The number of threads used.
- * @tparam ST The shared tile type.
- * @tparam GL The global tile type for the physical activations matrix.
- * @tparam GL_IDX The global tile type for the token mappings array.
- * @tparam COORD Coord type.
- * @param dst[out]  The destination shared tile.
- * @param src[in]   The source global tensor (unpermuted activations), shape [M, d_hidden].
- * @param idx[in]   Tile coordinate (m_tile, k_tile): m_tile is the M-tile index into the
- *                  PERMUTED row space; k_tile is the column-block index into src's actual K axis.
+ * @tparam ST         The shared tile type.
+ * @tparam GL         The global tile type for the physical activations matrix.
+ * @tparam GL_IDX     The global tile type for the token mappings array.
+ * @tparam COORD      Coord type.
+ * @param dst[out]    The destination shared tile.
+ * @param src[in]     The source global tensor (unpermuted activations), shape [M, d_hidden].
+ * @param idx[in]     Tile coordinate (m_tile, k_tile): m_tile is the M-tile index into the
+ *                    PERMUTED row space; k_tile is the column-block index into src's actual K axis.
  * @param sorted_token_ids[in]  Array mapping each permuted-space row index to its
  *                              corresponding bit-packed int, which encodes the token index in 
  *                              src. in the lower 24-bits, and its top-K slot in the upper 8.

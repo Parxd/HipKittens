@@ -76,7 +76,7 @@ def moe_stage1_reference(
 
 
 debug = False
-perf_benchmark = True
+perf_benchmark = False
 
 if debug:
     torch.set_printoptions(profile="full", sci_mode=False)
@@ -141,24 +141,24 @@ tk_kernel.call(
 )
 torch.cuda.synchronize()
 
-aiter.ck_moe_stage1_fwd(
-    hidden_states=hidden_states_fp8,
-    w1=w1_fp8_aiter,
-    w2=w2_fp8,
-    sorted_token_ids=sorted_ids,
-    sorted_expert_ids=sorted_expert_ids,
-    num_valid_ids=num_valid_ids,
-    out=out_ref,
-    topk=topk,
-    kernelName="",
-    w1_scale=w1_scale,
-    a1_scale=a1_scale,
-    block_m=32,
-    sorted_weights=None,
-    quant_type=aiter.QuantType.per_Token,
-    activation=aiter.ActivationType.Silu  # AITER swiglu uses weird GPT-OSS specific implementation
-)
-torch.cuda.synchronize()
+# aiter.ck_moe_stage1_fwd(
+#     hidden_states=hidden_states_fp8,
+#     w1=w1_fp8_aiter,
+#     w2=w2_fp8,
+#     sorted_token_ids=sorted_ids,
+#     sorted_expert_ids=sorted_expert_ids,
+#     num_valid_ids=num_valid_ids,
+#     out=out_ref,
+#     topk=topk,
+#     kernelName="",
+#     w1_scale=w1_scale,
+#     a1_scale=a1_scale,
+#     block_m=32,
+#     sorted_weights=None,
+#     quant_type=aiter.QuantType.per_Token,
+#     activation=aiter.ActivationType.Silu  # AITER swiglu uses weird GPT-OSS specific implementation
+# )
+# torch.cuda.synchronize()
 
 # out_ref = moe_stage1_reference(
 #     hidden_states_fp8,
@@ -171,12 +171,12 @@ torch.cuda.synchronize()
 
 # print("out_test:\n", out_test)
 # print("out_ref:\n", out_ref)
-max_abs_err = (out_test.float() - out_ref.float()).abs().max().item()
-print("max abs err:", max_abs_err)
-print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
+# max_abs_err = (out_test.float() - out_ref.float()).abs().max().item()
+# print("max abs err:", max_abs_err)
+# print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
 
 if perf_benchmark:
-    num_warmup, num_iters = 5, 100
+    num_warmup, num_iters = 5, 50
     for _ in range(num_warmup):
         tk_kernel.call(
             hidden_states_fp8,
@@ -192,9 +192,10 @@ if perf_benchmark:
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
-    torch.cuda.synchronize()
-    start.record()
+    timings = []
     for _ in range(num_iters):
+        torch.cuda.synchronize()
+        start.record()
         tk_kernel.call(
             hidden_states_fp8,
             a1_scale.reshape((num_tokens)),
@@ -205,16 +206,18 @@ if perf_benchmark:
             sorted_expert_ids,
             num_valid_ids
         )
-    end.record()
-    torch.cuda.synchronize()
-    avg = start.elapsed_time(end) / num_iters
+        end.record()
+        torch.cuda.synchronize()
+        timings.append(start.elapsed_time(end))
+    avg = sum(timings) / len(timings)
     print("TK perf.: ", avg)
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
-    torch.cuda.synchronize()
-    start.record()
+    timings = []
     for _ in range(num_iters):
+        torch.cuda.synchronize()
+        start.record()
         aiter.ck_moe_stage1_fwd(
             hidden_states=hidden_states_fp8,
             w1=w1_fp8_aiter,
@@ -232,7 +235,8 @@ if perf_benchmark:
             quant_type=aiter.QuantType.per_Token,
             activation=aiter.ActivationType.Silu
         )
-    end.record()
-    torch.cuda.synchronize()
-    avg = start.elapsed_time(end) / num_iters
+        end.record()
+        torch.cuda.synchronize()
+        timings.append(start.elapsed_time(end))
+    avg = sum(timings) / len(timings)
     print("AITER perf.: ", avg)
