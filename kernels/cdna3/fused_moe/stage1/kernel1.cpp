@@ -9,7 +9,7 @@ using namespace kittens;
 #define SPLIT_K False
 
 // MoE constants
-constexpr int D_INTER = 512;
+constexpr int D_INTER = 2048;
 constexpr int D_MODEL = 7168;
 constexpr int TOP_K = 8;
 
@@ -52,6 +52,7 @@ struct moe_stage1_globals {
     size_t dynamic_shared_memory() { return SMEM_BYTES; }
 };
 
+// NO TILE PREFETCH
 __global__ __launch_bounds__(NUM_THREADS, 4)
 void kernel(const moe_stage1_globals g) {
     extern __shared__ alignment_dummy __shm[];
@@ -76,8 +77,8 @@ void kernel(const moe_stage1_globals g) {
     constexpr int num_n_tiles = 2 * D_INTER / BLOCK_N;
     const int total_tiles = num_valid_m_tiles * num_n_tiles;
     const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
-    const int chunk_size = 4;
-    const int window_size = 1;
+    const int chunk_size = 8;
+    const int window_size = 4;
     const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
     for (int tile = 0; tile < num_tiles_per_cu && base_bidx + tile * gridDim.x < total_tiles; ++tile) {

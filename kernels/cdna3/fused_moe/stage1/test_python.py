@@ -4,12 +4,12 @@ from aiter.fused_moe_bf16_asm import moe_sorting_ck
 from aiter.ops.shuffle import shuffle_weight
 import tk_kernel
 
-inter_dim = 512
+inter_dim = 2048
 model_dim = 7168
 topk = 8
 
-num_tokens = 512
-num_experts = 32
+num_tokens = 64
+num_experts = 256
 block_m = 32
 block_n = 128
 WEIGHT_SWIZZLE_GRANULARITY = block_n // 2

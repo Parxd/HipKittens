@@ -9,8 +9,8 @@ using namespace kittens;
 #define SPLIT_K False
 
 // MoE constants
-constexpr int D_INTER = 512;
-constexpr int D_MODEL = 2048;
+constexpr int D_INTER = 2048;
+constexpr int D_MODEL = 7168;
 constexpr int TOP_K = 8;
 
 // intra-gemm constants
@@ -52,6 +52,7 @@ struct moe_stage1_globals {
     size_t dynamic_shared_memory() { return SMEM_BYTES; }
 };
 
+// TILE PREFETCH
 __global__ __launch_bounds__(NUM_THREADS, 4)
 void kernel(const moe_stage1_globals g) {
     extern __shared__ alignment_dummy __shm[];
@@ -100,11 +101,13 @@ void kernel(const moe_stage1_globals g) {
     // loads can be issued during tile i's epilogue and land in LDS at the top of iteration i+1.
     float4 a_tile0_buf[BUFFER_SIZE_A];
     float4 b_tile0_buf[BUFFER_SIZE_B];
+    int tokens[BYTES_PER_MEMCPY * 2];
 
     int output_m = 0, output_n = 0, expert = 0;
     const bool have_first = (num_tiles_per_cu > 0) && (base_bidx < total_tiles);
     if (have_first) {
         compute_tile_coords(0, output_m, output_n, expert);
+        gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As);
         load_global_to_register_buffer<2, false, NUM_THREADS>(b_tile0_buf, BUFFER_SIZE_B, g.B, {0, expert, output_n, 0}, Bs);
         gather_load_global_to_register_buffer<NUM_THREADS>(a_tile0_buf, BUFFER_SIZE_A, g.A, {0, 0, output_m, 0}, g.sorted_token_ids, As);
     }
@@ -123,7 +126,7 @@ void kernel(const moe_stage1_globals g) {
             float4 b_buffer_next[BUFFER_SIZE_B];
             
             load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, g.B, {0, expert, output_n, K_TILE + 1}, Bs);
-            gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, K_TILE + 1}, g.sorted_token_ids, As);
+            gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, K_TILE + 1}, tokens, As);
             load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
             load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
             load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 4, 0}));
@@ -160,12 +163,12 @@ void kernel(const moe_stage1_globals g) {
         int next_output_m = 0, next_output_n = 0, next_expert = 0;
         if (have_next) {
             compute_tile_coords(next_tile, next_output_m, next_output_n, next_expert);
+            gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, next_output_m, 0}, As);
             load_global_to_register_buffer<2, false, NUM_THREADS>(b_tile0_buf, BUFFER_SIZE_B, g.B, {0, next_expert, next_output_n, 0}, Bs);
-            gather_load_global_to_register_buffer<NUM_THREADS>(a_tile0_buf, BUFFER_SIZE_A, g.A, {0, 0, next_output_m, 0}, g.sorted_token_ids, As);
+            gather_load_global_to_register_buffer<NUM_THREADS>(a_tile0_buf, BUFFER_SIZE_A, g.A, {0, 0, next_output_m, 0}, tokens, As);
         }
-
-        gather_f32_sf_a<NUM_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
         if (warp_id == 0) {
+            gather_f32_sf_a<WARP_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
             load(sf_gate, g.sf_B, {expert, output_n});
             load(sf_up, g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
         }

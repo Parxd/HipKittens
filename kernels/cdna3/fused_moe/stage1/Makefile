@@ -1,6 +1,6 @@
 GPU_TARGET ?= CDNA3
 TARGET ?= tk_kernel
-SRC ?= k128_tile_prefetch.cpp
+SRC ?= kernel1.cpp
 PYTHON ?= python3
 
 include ../../../common.mk
