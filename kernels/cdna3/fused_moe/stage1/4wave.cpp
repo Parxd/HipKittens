@@ -99,7 +99,7 @@ void kernel(const moe_stage1_globals g) {
         constexpr int BYTES_PER_MEMCPY = NUM_THREADS * sizeof(float4) / sizeof(fp8e4m3);
         constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;  // equivalent to tokens per lane
         constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
-        int tokens[BUFFER_SIZE_A * 2];  // token + top-k slot
+        int tokens[BUFFER_SIZE_A];
         float4 a_buffer_next[BUFFER_SIZE_A];
         float4 b_buffer_next[BUFFER_SIZE_B];
 

@@ -22,8 +22,7 @@ __device__ inline void store_shared_f32(uint32_t lds_off, float val) {
  *        mapped to the same token more than once (i.e. memcpy_per_row <= N_THREADS)
  *
  * @tparam N_THREADS            The number of threads used.
- * @param dst[out]              Register buffer to hold token metadata.
- *                              Organized as: [TokenID_0, TopK_0, TokenID_1, TopK_1, ...]
+ * @param dst[out]              Register buffer to hold token IDs.
  * @param sorted_token_ids[in]  Array mapping each permuted-space row index to its
  *                              corresponding bit-packed int, which encodes the token index in 
  *                              src. in the lower 24-bits, and its top-K slot in the upper 8.
@@ -57,8 +56,7 @@ __device__ inline void gather_tokens(int* dst, const GL& sorted_token_ids, const
         int row = load_idx / memcpy_per_row;
 
         int packed = tm_ptr[row];
-        dst[2 * i] = packed & 0x00FFFFFF;
-        dst[2 * i + 1] = (packed & 0xFF000000) >> 24;
+        dst[i] = packed & 0x00FFFFFF;
     }
 }
 
