@@ -57,8 +57,8 @@ __device__ inline void gather_tokens(int* dst, const GL& sorted_token_ids, const
         int row = load_idx / memcpy_per_row;
 
         int packed = tm_ptr[row];
-        dst[i] = packed & 0x00FFFFFF;
-        dst[i + 1] = (packed & 0xFF000000) >> 24;
+        dst[2 * i] = packed & 0x00FFFFFF;
+        dst[2 * i + 1] = (packed & 0xFF000000) >> 24;
     }
 }
 
