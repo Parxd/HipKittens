@@ -11,7 +11,7 @@ topk = 8
 num_tokens = 64
 num_experts = 256
 block_m = 32
-block_n = 128
+block_n = 64  # must match the kernel's BLOCK_N (4wave.cpp uses 64)
 WEIGHT_SWIZZLE_GRANULARITY = block_n // 2
 fp8 = torch.float8_e4m3fnuz
 

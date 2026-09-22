@@ -161,7 +161,7 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_sched_barrier(0);
 
         asm volatile("s_waitcnt lgkmcnt(0)");
-        mma_ABt(accum[0], a_tiles[0], b_tiles[2], accum[0]);
+        mma_ABt(accum[0], a_tiles[1], b_tiles[2], accum[0]);
         mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
         __builtin_amdgcn_sched_barrier(0);
         

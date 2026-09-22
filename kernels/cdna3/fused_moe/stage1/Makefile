@@ -1,6 +1,6 @@
 GPU_TARGET ?= CDNA3
 TARGET ?= tk_kernel
-SRC ?= kernel1.cpp
+SRC ?= 4wave.cpp
 PYTHON ?= python3
 
 include ../../../common.mk
