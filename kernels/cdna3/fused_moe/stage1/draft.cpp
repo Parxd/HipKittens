@@ -52,7 +52,6 @@ struct moe_stage1_globals {
     size_t dynamic_shared_memory() { return SMEM_BYTES; }
 };
 
-// NO TILE PREFETCH
 __global__ __launch_bounds__(NUM_THREADS, 2)
 void kernel(const moe_stage1_globals g) {
     extern __shared__ alignment_dummy __shm[];
@@ -102,10 +101,10 @@ void kernel(const moe_stage1_globals g) {
         bool b_buffer = 0;
         gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As);
         gather_load<NUM_THREADS>(As, g.A, {0, 0, output_m, 0}, tokens);
-        load_gl2rt(b_tiles[b_buffer][0], g.B, {0, expert, output_n * 4 + warp_col, 0});      // vmcnt+=1
-        load_gl2rt(b_tiles[b_buffer][1], g.B, {0, expert, output_n * 4 + warp_col, 1});      // vmcnt+=1
-        load_gl2rt(b_tiles[b_buffer][2], g.B, {0, expert, output_n * 4 + warp_col + 1, 0});  // vmcnt+=1
-        load_gl2rt(b_tiles[b_buffer][3], g.B, {0, expert, output_n * 4 + warp_col + 1, 1});  // vmcnt+=1
+        load_gl2rt(b_tiles[b_buffer][0], g.B, {0, expert, output_n * 4 + warp_col * 2, 0});      // vmcnt+=4
+        load_gl2rt(b_tiles[b_buffer][2], g.B, {0, expert, output_n * 4 + warp_col * 2 + 1, 0});  // vmcnt+=4
+        load_gl2rt(b_tiles[b_buffer][1], g.B, {0, expert, output_n * 4 + warp_col * 2, 1});      // vmcnt+=4
+        load_gl2rt(b_tiles[b_buffer][3], g.B, {0, expert, output_n * 4 + warp_col * 2 + 1, 1});  // vmcnt+=4
         gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, 1}, tokens, As);  // vmcnt+=2
         asm volatile("s_waitcnt vmcnt(2)");
         __builtin_amdgcn_s_barrier();
@@ -116,81 +115,102 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_sched_barrier(0);
 
         for (int K_TILE = 1; K_TILE < k_iters - 1; ++K_TILE) {
-            load_gl2rt(b_tiles[b_buffer^1][0], g.B, {0, expert, output_n * 4 + warp_col, K_TILE * 2});
-            load_gl2rt(b_tiles[b_buffer^1][1], g.B, {0, expert, output_n * 4 + warp_col, K_TILE * 2 + 1});
+            load_gl2rt(b_tiles[b_buffer^1][0], g.B, {0, expert, output_n * 4 + warp_col * 2, K_TILE * 2});
+            load_gl2rt(b_tiles[b_buffer^1][2], g.B, {0, expert, output_n * 4 + warp_col * 2 + 1, K_TILE * 2});
             asm volatile("s_waitcnt lgkmcnt(1)");
             __builtin_amdgcn_sched_barrier(0);
 
-            load_gl2rt(b_tiles[b_buffer^1][2], g.B, {0, expert, output_n * 4 + warp_col + 1, K_TILE * 2});
             mma_ABt(accum[0], a_tiles[0], b_tiles[b_buffer][0], accum[0]);  // gate
-            mma_ABt(accum[0], a_tiles[0], b_tiles[b_buffer][1], accum[0]);  // gate
+            mma_ABt(accum[1], a_tiles[0], b_tiles[b_buffer][2], accum[1]);  // up
             __builtin_amdgcn_sched_barrier(0);
 
-            load_gl2rt(b_tiles[b_buffer^1][3], g.B, {0, expert, output_n * 4 + warp_col + 1, K_TILE * 2 + 1});
+            load_gl2rt(b_tiles[b_buffer^1][1], g.B, {0, expert, output_n * 4 + warp_col * 2, K_TILE * 2 + 1});
+            load_gl2rt(b_tiles[b_buffer^1][3], g.B, {0, expert, output_n * 4 + warp_col * 2 + 1, K_TILE * 2 + 1});
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_sched_barrier(0);
 
             __builtin_amdgcn_s_barrier();
-            asm volatile("s_waitcnt vmcnt(4)");
+            asm volatile("s_waitcnt vmcnt(16)");
             store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
             __builtin_amdgcn_sched_barrier(0);
-
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_sched_barrier(0);
-            
             gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, K_TILE + 1}, tokens, As);  // vmcnt+=2
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
             load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
-            mma_ABt(accum[1], a_tiles[1], b_tiles[b_buffer][2], accum[1]);  // up
-            load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
+            mma_ABt(accum[0], a_tiles[1], b_tiles[b_buffer][1], accum[0]);  // gate
             mma_ABt(accum[1], a_tiles[1], b_tiles[b_buffer][3], accum[1]);  // up
+            __builtin_amdgcn_sched_barrier(0);
+
+            load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
             __builtin_amdgcn_sched_barrier(0);
 
             b_buffer^=1;
         }
+        {
+            load_gl2rt(b_tiles[b_buffer^1][0], g.B, {0, expert, output_n * 4 + warp_col * 2, (k_iters - 1) * 2});
+            load_gl2rt(b_tiles[b_buffer^1][2], g.B, {0, expert, output_n * 4 + warp_col * 2 + 1, (k_iters - 1) * 2});
+            load_gl2rt(b_tiles[b_buffer^1][1], g.B, {0, expert, output_n * 4 + warp_col * 2, (k_iters - 1) * 2 + 1});
+            load_gl2rt(b_tiles[b_buffer^1][3], g.B, {0, expert, output_n * 4 + warp_col * 2 + 1, (k_iters - 1) * 2 + 1});
+            asm volatile("s_waitcnt lgkmcnt(1)");
+            __builtin_amdgcn_sched_barrier(0);
 
+            mma_ABt(accum[0], a_tiles[0], b_tiles[b_buffer][0], accum[0]);  // gate
+            mma_ABt(accum[1], a_tiles[0], b_tiles[b_buffer][2], accum[1]);  // up
+            __builtin_amdgcn_sched_barrier(0);
 
+            asm volatile("s_waitcnt lgkmcnt(0)");
+            __builtin_amdgcn_sched_barrier(0);
+            mma_ABt(accum[0], a_tiles[1], b_tiles[b_buffer][1], accum[0]);  // gate
+            mma_ABt(accum[1], a_tiles[1], b_tiles[b_buffer][3], accum[1]);  // up
+            __builtin_amdgcn_sched_barrier(0);
 
-        // epilogue
-        if (warp_id == 0) {
-            gather_f32_sf_a<WARP_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
-            load(sf_gate, g.sf_B, {expert, output_n});
-            load(sf_up, g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
+            __builtin_amdgcn_s_barrier();
+            asm volatile("s_waitcnt vmcnt(16)");
+            store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
+            __builtin_amdgcn_sched_barrier(0);
+
+            asm volatile("s_waitcnt lgkmcnt(0)");
+            __builtin_amdgcn_s_barrier();
+            __builtin_amdgcn_sched_barrier(0);
+
+            load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
+            load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
+            b_buffer ^= 1;
+            __builtin_amdgcn_sched_barrier(0);
         }
-        load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
-        load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
-        load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 2, 0}));
-        __builtin_amdgcn_sched_barrier(0);
+        {
+            if (warp_id == 0) {
+                gather_f32_sf_a<WARP_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
+                load(sf_gate, g.sf_B, {expert, output_n});
+                load(sf_up, g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
+            }
+            asm volatile("s_waitcnt lgkmcnt(1)");
+            __builtin_amdgcn_sched_barrier(0);
 
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        __builtin_amdgcn_sched_barrier(0);
-        load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
-        mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
-        __builtin_amdgcn_sched_barrier(0);
+            mma_ABt(accum[0], a_tiles[0], b_tiles[b_buffer][0], accum[0]);  // gate
+            mma_ABt(accum[1], a_tiles[0], b_tiles[b_buffer][2], accum[1]);  // up
+            __builtin_amdgcn_sched_barrier(0);
 
-        load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));
-        load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 2, 1}));
-        mma_ABt(accum[1], a_tiles[0], b_tiles[1], accum[1]);
-        __builtin_amdgcn_sched_barrier(0);
+            asm volatile("s_waitcnt lgkmcnt(0)");
+            __builtin_amdgcn_sched_barrier(0);
+            mma_ABt(accum[0], a_tiles[1], b_tiles[b_buffer][1], accum[0]);  // gate
+            mma_ABt(accum[1], a_tiles[1], b_tiles[b_buffer][3], accum[1]);  // up
+            __builtin_amdgcn_sched_barrier(0);
 
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(accum[0], a_tiles[1], b_tiles[2], accum[0]);
-        mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
-        __builtin_amdgcn_sched_barrier(0);
-        
-        __builtin_amdgcn_s_barrier();  // for scale factors
-        load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
-        load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
-        load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
-        apply_row_sf(accum[0], accum[0], reg_sf_A);
-        apply_col_sf(accum[0], accum[0], reg_sf_W[0]);
-        apply_row_sf(accum[1], accum[1], reg_sf_A);
-        apply_col_sf(accum[1], accum[1], reg_sf_W[1]);
-        silu(accum[0], accum[0]);
-        mul(accum[0], accum[0], accum[1]);
+            __builtin_amdgcn_s_barrier();  // for scale factors
+            load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
+            load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
+            load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
+            apply_row_sf(accum[0], accum[0], reg_sf_A);
+            apply_col_sf(accum[0], accum[0], reg_sf_W[0]);
+            apply_row_sf(accum[1], accum[1], reg_sf_A);
+            apply_col_sf(accum[1], accum[1], reg_sf_W[1]);
+            silu(accum[0], accum[0]);
+            mul(accum[0], accum[0], accum[1]);
+        }
 
         scatter_store<TOP_K>(g.C, accum[0], {0, 0, output_m * 2 + warp_row, output_n * 2 + warp_col}, g.sorted_token_ids);
     }

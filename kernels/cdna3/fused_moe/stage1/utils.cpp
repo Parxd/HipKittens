@@ -387,8 +387,8 @@ __device__  inline void scatter_store(
     }
 }
 
-template <ducks::gl:all GL,
-        ducks::rt:all RT,
+template <ducks::gl::all GL,
+        ducks::rt::all RT,
         ducks::coord::tile COORD=coord<RT>
 >
 __device__ inline void load_gl2rt(RT& dst, const GL& src, const COORD& idx) {
@@ -399,11 +399,11 @@ __device__ inline void load_gl2rt(RT& dst, const GL& src, const COORD& idx) {
     int laneid = kittens::laneid();
     const int lane_offset = (laneid/16)*8 + (laneid%16)*32;
     constexpr int MFMA_TILE_SIZE = 16*32;
-    const int expert_offset = idx.d * src.rows() * src.cols();
     const int coord_row_offset = idx.r * dst.height * (src.cols() / 32) * MFMA_TILE_SIZE;
     const int coord_col_offset = idx.c * dst.width * MFMA_TILE_SIZE;
-    
-    uint32_t buffer_size = src.batch() * src.depth() * src.rows() * src.cols() * sizeof(U);
+
+    U *src_ptr = (U*)&src[{0, idx.d, 0, 0}];
+    uint32_t buffer_size = src.rows() * src.cols() * sizeof(U);
     std::uintptr_t as_int = reinterpret_cast<std::uintptr_t>(src_ptr);
     std::uint64_t as_u64 = static_cast<std::uint64_t>(as_int);
     buffer_resource br = make_buffer_resource(as_u64, buffer_size, 0x00020000);
@@ -417,7 +417,7 @@ __device__ inline void load_gl2rt(RT& dst, const GL& src, const COORD& idx) {
             U2* tmp;
             float2 loaded = std::bit_cast<float2>(llvm_amdgcn_raw_buffer_load_b64(
                 std::bit_cast<i32x4>(br),
-                (expert_offset + coord_row_offset + coord_col_offset + row + col + lane_offset) * sizeof(U),
+                (coord_row_offset + coord_col_offset + row + col + lane_offset) * sizeof(U),
                 0,
                 0
             ));
