@@ -386,3 +386,46 @@ __device__  inline void scatter_store(
         }
     }
 }
+
+template <ducks::gl:all GL,
+        ducks::rt:all RT,
+        ducks::coord::tile COORD=coord<RT>
+>
+__device__ inline void load_gl2rt(RT& dst, const GL& src, const COORD& idx) {
+    using T2 = RT::dtype;
+    using U = typename GL::dtype;
+    using U2 = base_types::packing<U>::packed_type;
+
+    int laneid = kittens::laneid();
+    const int lane_offset = (laneid/16)*8 + (laneid%16)*32;
+    constexpr int MFMA_TILE_SIZE = 16*32;
+    const int expert_offset = idx.d * src.rows() * src.cols();
+    const int coord_row_offset = idx.r * dst.height * (src.cols() / 32) * MFMA_TILE_SIZE;
+    const int coord_col_offset = idx.c * dst.width * MFMA_TILE_SIZE;
+    
+    uint32_t buffer_size = src.batch() * src.depth() * src.rows() * src.cols() * sizeof(U);
+    std::uintptr_t as_int = reinterpret_cast<std::uintptr_t>(src_ptr);
+    std::uint64_t as_u64 = static_cast<std::uint64_t>(as_int);
+    buffer_resource br = make_buffer_resource(as_u64, buffer_size, 0x00020000);
+
+    #pragma unroll
+    for(int i = 0; i < dst.height; i++) {
+        int row = i*(src.cols()/32)*MFMA_TILE_SIZE;
+        #pragma unroll
+        for(int j = 0; j < dst.width; j++) {
+            int col = j*MFMA_TILE_SIZE;
+            U2* tmp;
+            float2 loaded = std::bit_cast<float2>(llvm_amdgcn_raw_buffer_load_b64(
+                std::bit_cast<i32x4>(br),
+                (expert_offset + coord_row_offset + coord_col_offset + row + col + lane_offset) * sizeof(U),
+                0,
+                0
+            ));
+            tmp = reinterpret_cast<U2*>(&loaded);
+            #pragma unroll
+            for(int k = 0; k < 2; k++) {
+                dst.tiles[i][j].data[k] = base_types::convertor<T2, U2>::convert(tmp[k]);
+            }
+        }
+    }
+}
