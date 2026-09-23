@@ -76,7 +76,7 @@ def moe_stage1_reference(
 
 
 debug = False
-perf_benchmark = True
+perf_benchmark = False
 
 if debug:
     torch.set_printoptions(profile="full", sci_mode=False)
@@ -98,7 +98,7 @@ w1_gate_fp8 = w1_gate.to(fp8)
 w1_up_fp8 = w1_up.to(fp8)
 w1_fp8 = torch.concat((w1_gate_fp8, w1_up_fp8), dim=1)
 # CK reuqires B in MFMA-shuffled layout
-w1_fp8_aiter = shuffle_weight(w1_fp8, layout=(16, 16))
+w1_fp8_aiter = shuffle_weight(w1_fp8, layout=(16, 32))
 w2_fp8 = w2.to(fp8)
 
 topk_weights, topk_ids = torch.topk(router_logits.softmax(dim=-1), k=topk, dim=-1)
@@ -129,17 +129,17 @@ else:
 
 interleaved = interleave_gate_up(w1_gate_fp8, w1_up_fp8, WEIGHT_SWIZZLE_GRANULARITY)
 
-tk_kernel.call(
-    hidden_states_fp8,
-    a1_scale.reshape((num_tokens)),
-    interleaved,
-    w1_scale.reshape((num_experts, inter_dim * 2)),
-    out_test,
-    sorted_ids,
-    sorted_expert_ids,
-    num_valid_ids
-)
-torch.cuda.synchronize()
+# tk_kernel.call(
+#     hidden_states_fp8,
+#     a1_scale.reshape((num_tokens)),
+#     interleaved,
+#     w1_scale.reshape((num_experts, inter_dim * 2)),
+#     out_test,
+#     sorted_ids,
+#     sorted_expert_ids,
+#     num_valid_ids
+# )
+# torch.cuda.synchronize()
 
 aiter.ck_moe_stage1_fwd(
     hidden_states=hidden_states_fp8,
@@ -160,20 +160,25 @@ aiter.ck_moe_stage1_fwd(
 )
 torch.cuda.synchronize()
 
-# out_ref = moe_stage1_reference(
-#     hidden_states_fp8,
-#     a1_scale.reshape((num_tokens)),
-#     w1_gate_fp8,
-#     w1_up_fp8,
-#     w1_scale.reshape((num_experts, inter_dim * 2)),
-#     topk_ids,
-# )
+out_torch = moe_stage1_reference(
+    hidden_states_fp8,
+    a1_scale.reshape((num_tokens)),
+    w1_gate_fp8,
+    w1_up_fp8,
+    w1_scale.reshape((num_experts, inter_dim * 2)),
+    topk_ids,
+)
 
 # print("out_test:\n", out_test)
-# print("out_ref:\n", out_ref)
+print("out_ref:\n", out_ref)
+print("out_torch:\n", out_torch)
 max_abs_err = (out_test.float() - out_ref.float()).abs().max().item()
 print("max abs err:", max_abs_err)
 print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
+
+max_abs_err = (out_torch.float() - out_ref.float()).abs().max().item()
+print("max abs err:", max_abs_err)
+print("allclose:", torch.allclose(out_torch.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
 
 if perf_benchmark:
     num_warmup, num_iters = 5, 100
