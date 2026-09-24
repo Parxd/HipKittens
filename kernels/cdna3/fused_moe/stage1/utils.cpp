@@ -333,8 +333,10 @@ __device__ static inline void apply_col_sf(T& dst, const T &src, const V &col_va
 }
 
 /**
- * @brief 
- * 
+ * @brief Scatters a warp's accumulator tile to the routed output rows using
+ *        non-temporal (streaming) global stores so the write-once results bypass
+ *        L2 residency and avoid evicting reused weights/activations.
+ *
  * @tparam TOP_K    Mixture-of-Experts Top-K parameter
  * @param dst[out]  Destination global tile
  * @param src[in]   Source register tile
@@ -380,51 +382,9 @@ __device__  inline void scatter_store(
                 int flat_offset = (token_id * TOP_K + topk_slot) * row_stride + col_offset;
 
                 if (token_id != sentinel) {
-                    base_ptr[flat_offset] = __float2bfloat16(flat[k]);
+                    uint16_t bits = __builtin_bit_cast(uint16_t, __float2bfloat16(flat[k]));
+                    llvm_amdgcn_raw_buffer_store_b16(bits, srsrc, flat_offset * sizeof(T), 0, 0b10);
                 }
-            }
-        }
-    }
-}
-
-template <ducks::gl::all GL,
-        ducks::rt::all RT,
-        ducks::coord::tile COORD=coord<RT>
->
-__device__ inline void load_gl2rt(RT& dst, const GL& src, const COORD& idx) {
-    using T2 = RT::dtype;
-    using U = typename GL::dtype;
-    using U2 = base_types::packing<U>::packed_type;
-
-    int laneid = kittens::laneid();
-    const int lane_offset = (laneid/16)*8 + (laneid%16)*32;
-    constexpr int MFMA_TILE_SIZE = 16*32;
-    const int coord_row_offset = idx.r * dst.height * (src.cols() / 32) * MFMA_TILE_SIZE;
-    const int coord_col_offset = idx.c * dst.width * MFMA_TILE_SIZE;
-
-    U *src_ptr = (U*)&src[{0, idx.d, 0, 0}];
-    uint32_t buffer_size = src.rows() * src.cols() * sizeof(U);
-    std::uintptr_t as_int = reinterpret_cast<std::uintptr_t>(src_ptr);
-    std::uint64_t as_u64 = static_cast<std::uint64_t>(as_int);
-    buffer_resource br = make_buffer_resource(as_u64, buffer_size, 0x00020000);
-
-    #pragma unroll
-    for(int i = 0; i < dst.height; i++) {
-        int row = i*(src.cols()/32)*MFMA_TILE_SIZE;
-        #pragma unroll
-        for(int j = 0; j < dst.width; j++) {
-            int col = j*MFMA_TILE_SIZE;
-            U2* tmp;
-            float2 loaded = std::bit_cast<float2>(llvm_amdgcn_raw_buffer_load_b64(
-                std::bit_cast<i32x4>(br),
-                (coord_row_offset + coord_col_offset + row + col + lane_offset) * sizeof(U),
-                0,
-                0
-            ));
-            tmp = reinterpret_cast<U2*>(&loaded);
-            #pragma unroll
-            for(int k = 0; k < 2; k++) {
-                dst.tiles[i][j].data[k] = base_types::convertor<T2, U2>::convert(tmp[k]);
             }
         }
     }

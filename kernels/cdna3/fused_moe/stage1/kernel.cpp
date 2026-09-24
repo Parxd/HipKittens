@@ -1,3 +1,4 @@
+#include "cdna3/common/util.cuh"
 #include "kittens.cuh" 
 #include "pyutils/pyutils.cuh"
 #include <hip/hip_runtime.h>
@@ -16,13 +17,16 @@ constexpr int TOP_K = 8;
 // intra-gemm constants
 constexpr int BLOCK_M = 32;
 constexpr int BLOCK_N = 64;
-constexpr int BLOCK_K = 256;
+constexpr int BLOCK_K = 128;
 constexpr int REG_M = 16;
 constexpr int REG_N = 16;
-constexpr int REG_K = 128;
+constexpr int REG_K = 64;
 constexpr int NUM_THREADS = NUM_WARPS * WARP_THREADS;
 constexpr int WEIGHT_SWIZZLE_GRANULARITY = BLOCK_N / 2;
-constexpr size_t SMEM_BYTES = (BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K) * sizeof(fp8e4m3) + 
+// Double-buffered LDS: two copies of the A and B tiles so the producer can write
+// the next K-tile while the consumer reads the current one (removes the barrier
+// bubble). Costs 2x the tile SMEM -> occupancy drops to 2 blocks/CU.
+constexpr size_t SMEM_BYTES = 2 * (BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K) * sizeof(fp8e4m3) + 
                             ((BLOCK_M + WEIGHT_SWIZZLE_GRANULARITY * 2) * sizeof(float));
 constexpr int OCCUPANCY = 2;
 static_assert(SMEM_BYTES * OCCUPANCY <= 64 * 1024, "SMEM_BYTES * OCCUPANCY exceeds gfx942 LDS size (64 KiB)");
@@ -53,14 +57,17 @@ struct moe_stage1_globals {
     size_t dynamic_shared_memory() { return SMEM_BYTES; }
 };
 
-// NO TILE PREFETCH
-__global__ __launch_bounds__(NUM_THREADS, 2)
+__global__ __launch_bounds__(NUM_THREADS, OCCUPANCY)
 void kernel(const moe_stage1_globals g) {
     extern __shared__ alignment_dummy __shm[];
     shared_allocator al((int*)&__shm[0]);
-    
-    auto (&As) = al.allocate<st<fp8e4m3, BLOCK_M, BLOCK_K>>();
-    auto (&Bs) = al.allocate<st<fp8e4m3, BLOCK_N, BLOCK_K>>();
+
+    using a_st = st<fp8e4m3, BLOCK_M, BLOCK_K>;
+    using b_st = st<fp8e4m3, BLOCK_N, BLOCK_K>;
+    auto (&As0) = al.allocate<a_st>();
+    auto (&As1) = al.allocate<a_st>();
+    auto (&Bs0) = al.allocate<b_st>();
+    auto (&Bs1) = al.allocate<b_st>();
     auto (&sf_A) = al.allocate<sv_fl<BLOCK_M>>();
     auto (&sf_gate) = al.allocate<sv_fl<WEIGHT_SWIZZLE_GRANULARITY>>();
     auto (&sf_up) = al.allocate<sv_fl<WEIGHT_SWIZZLE_GRANULARITY>>();
@@ -78,13 +85,11 @@ void kernel(const moe_stage1_globals g) {
     constexpr int num_n_tiles = 2 * D_INTER / BLOCK_N;
     const int total_tiles = num_valid_m_tiles * num_n_tiles;
     const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
-    const int chunk_size = 8;
-    const int window_size = 4;
+    const int chunk_size = CUS_PER_XCD * OCCUPANCY;
+    const int window_size = CUS_PER_XCD * OCCUPANCY;
     const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
     for (int tile = 0; tile < num_tiles_per_cu && base_bidx + tile * gridDim.x < total_tiles; ++tile) {
-    // for (int lt = blockIdx.x; lt < total_tiles; lt += gridDim.x) {
-        for (int i = 0; i < 2; i++) { zero(accum[i]); }
 
         const int remap_bidx = base_bidx + tile * gridDim.x;
         int num_wgid_in_group = window_size * num_n_tiles;
@@ -93,37 +98,46 @@ void kernel(const moe_stage1_globals g) {
         int group_size_m = min(num_valid_m_tiles - first_pid_m, window_size);
         int output_m = first_pid_m + ((remap_bidx % num_wgid_in_group) % group_size_m);
         int output_n = (remap_bidx % num_wgid_in_group) / group_size_m;
-        // int output_m = lt % num_valid_m_tiles, output_n = lt / num_valid_m_tiles;
         int expert = g.sorted_expert_ids[output_m];
 
         constexpr int BYTES_PER_MEMCPY = NUM_THREADS * sizeof(float4) / sizeof(fp8e4m3);
-        constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;  // equivalent to tokens per lane
+        constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
         constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
         int tokens[BUFFER_SIZE_A];
-        float4 a_buffer_next[BUFFER_SIZE_A];
-        float4 b_buffer_next[BUFFER_SIZE_B];
+        // Register staging for the 2-ahead prefetch (indexed by K-tile parity).
+        float4 a_buf[2][BUFFER_SIZE_A];
+        float4 b_buf[2][BUFFER_SIZE_B];
 
-        gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As);
-        gather_load<NUM_THREADS>(As, g.A, {0, 0, output_m, 0}, tokens);
-        G::load(Bs, g.B, {0, expert, output_n, 0});
-        __builtin_amdgcn_s_barrier();
+        gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As0);
+        for (int i = 0; i < 2; i++) { zero(accum[i]); }
+        gather_load<NUM_THREADS>(As0, g.A, {0, 0, output_m, 0}, tokens);   // tile 0 -> LDS buf 0
+        G::load(Bs0, g.B, {0, expert, output_n, 0});
 
-        for (int K_TILE = 0; K_TILE < k_iters - 1; ++K_TILE) {
-            load_global_to_register_buffer<2, false, NUM_THREADS>(b_buffer_next, BUFFER_SIZE_B, g.B, {0, expert, output_n, K_TILE + 1}, Bs);
-            gather_load_global_to_register_buffer<NUM_THREADS>(a_buffer_next, BUFFER_SIZE_A, g.A, {0, 0, output_m, K_TILE + 1}, tokens, As);
-            load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
-            load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));
-            load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 2, 0}));
+        // Issue the global loads for K-tile `k_tile` into the given register buffers.
+        auto prefetch = [&](int k_tile, float4* a_dst, float4* b_dst) {
+            load_global_to_register_buffer<2, false, NUM_THREADS>(b_dst, BUFFER_SIZE_B, g.B, {0, expert, output_n, k_tile}, Bs0);
+            gather_load_global_to_register_buffer<NUM_THREADS>(a_dst, BUFFER_SIZE_A, g.A, {0, 0, output_m, k_tile}, tokens, As0);
+        };
+        // Drain register buffers into the given (alternate) LDS buffer.
+        auto commit = [&](a_st& As_d, b_st& Bs_d, const float4* a_src, const float4* b_src) {
+            store_register_buffer_to_shared<NUM_THREADS>(As_d, a_src);
+            store_register_buffer_to_shared<NUM_THREADS>(Bs_d, b_src);
+        };
+        // Consume the current LDS buffer: load register tiles and run the four MMAs.
+        auto compute = [&](a_st& As_c, b_st& Bs_c) {
+            load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As_c, {warp_row, 0}));
+            load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs_c, {warp_col, 0}));
+            load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs_c, {warp_col + 2, 0}));
             __builtin_amdgcn_sched_barrier(0);
 
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_sched_barrier(0);
-            load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
+            load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As_c, {warp_row, 1}));
             mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
             __builtin_amdgcn_sched_barrier(0);
 
-            load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));
-            load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 2, 1}));
+            load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs_c, {warp_col, 1}));
+            load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs_c, {warp_col + 2, 1}));
             mma_ABt(accum[1], a_tiles[0], b_tiles[1], accum[1]);
             __builtin_amdgcn_sched_barrier(0);
 
@@ -132,42 +146,43 @@ void kernel(const moe_stage1_globals g) {
             mma_ABt(accum[0], a_tiles[1], b_tiles[2], accum[0]);
             mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
             __builtin_amdgcn_sched_barrier(0);
+        };
 
+        // Prologue: LDS buf 0 holds tile 0; stage tile 1 into register buffer 1.
+        prefetch(1, a_buf[1], b_buf[1]);
+        __builtin_amdgcn_s_barrier();
+
+        // Double-buffered LDS pipeline. Unrolled by two so both the LDS buffer and
+        // the register ping-pong indices are compile-time constants. Each iteration:
+        //   - prefetch tile K+2 into registers (2-ahead, hides HBM latency),
+        //   - compute tile K from the current LDS buffer,
+        //   - drain tile K+1 (loaded last iter) into the ALTERNATE LDS buffer,
+        //   - single barrier (vs. two in the single-buffered version).
+        int K_TILE = 0;
+        for (; K_TILE + 1 < k_iters; K_TILE += 2) {
+            // Even: LDS buf 0 = tile K; write tile K+1 into buf 1.
+            if (K_TILE + 2 < k_iters) prefetch(K_TILE + 2, a_buf[0], b_buf[0]);
+            compute(As0, Bs0);
+            if (K_TILE + 1 < k_iters) commit(As1, Bs1, a_buf[1], b_buf[1]);
+            asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_barrier();
-            store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
-            store_register_buffer_to_shared<NUM_THREADS>(Bs, b_buffer_next);
+            __builtin_amdgcn_sched_barrier(0);
+
+            // Odd: LDS buf 1 = tile K+1; write tile K+2 into buf 0.
+            if (K_TILE + 3 < k_iters) prefetch(K_TILE + 3, a_buf[1], b_buf[1]);
+            compute(As1, Bs1);
+            if (K_TILE + 2 < k_iters) commit(As0, Bs0, a_buf[0], b_buf[0]);
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
         }
+
         if (warp_id == 0) {
             gather_f32_sf_a<WARP_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
             load(sf_gate, g.sf_B, {expert, output_n});
             load(sf_up, g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
         }
-        load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As, {warp_row, 0}));
-        load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 0}));      // gate
-        load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 2, 0}));  // up
-        __builtin_amdgcn_sched_barrier(0);
-
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        __builtin_amdgcn_sched_barrier(0);
-        load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As, {warp_row, 1}));
-        mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
-        __builtin_amdgcn_sched_barrier(0);
-
-        load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs, {warp_col, 1}));      // gate
-        load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs, {warp_col + 2, 1}));  // up
-        mma_ABt(accum[1], a_tiles[0], b_tiles[1], accum[1]);
-        __builtin_amdgcn_sched_barrier(0);
-
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        __builtin_amdgcn_sched_barrier(0);
-        mma_ABt(accum[0], a_tiles[1], b_tiles[2], accum[0]);
-        mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
-        __builtin_amdgcn_sched_barrier(0);
-        
-        __builtin_amdgcn_s_barrier();  // for scale factors
+        __builtin_amdgcn_s_barrier();
         load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
         load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
         load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));

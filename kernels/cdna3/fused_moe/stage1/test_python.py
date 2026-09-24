@@ -1,17 +1,22 @@
+import statistics
+
 import torch
 import aiter
 from aiter.fused_moe_bf16_asm import moe_sorting_ck
 from aiter.ops.shuffle import shuffle_weight
 import tk_kernel
 
+torch.manual_seed(0)
+
+perf_benchmark = True
 inter_dim = 2048
 model_dim = 7168
 topk = 8
 
-num_tokens = 64
+num_tokens = 16
 num_experts = 256
 block_m = 32
-block_n = 64  # must match the kernel's BLOCK_N (4wave.cpp uses 64)
+block_n = 64
 WEIGHT_SWIZZLE_GRANULARITY = block_n // 2
 fp8 = torch.float8_e4m3fnuz
 
@@ -75,30 +80,18 @@ def moe_stage1_reference(
     return act.to(torch.bfloat16)
 
 
-debug = False
-perf_benchmark = False
-
-if debug:
-    torch.set_printoptions(profile="full", sci_mode=False)
-
-    hidden_states = torch.ones(num_tokens, model_dim, dtype=torch.bfloat16, device="cuda")
-    w1_gate = torch.ones(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda")
-    w1_up = torch.ones(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda")
-    w2 = torch.ones(num_experts, model_dim, inter_dim, dtype=torch.bfloat16, device="cuda")
-    router_logits = torch.ones(num_tokens, num_experts, device="cuda")
-else:
-    hidden_states = torch.randn(num_tokens, model_dim, dtype=torch.bfloat16, device="cuda")
-    w1_gate = torch.randn(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda")
-    w1_up = torch.randn(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda")
-    w2 = torch.randn(num_experts, model_dim, inter_dim, dtype=torch.bfloat16, device="cuda")
-    router_logits = torch.randn(num_tokens, num_experts, device="cuda")
+hidden_states = torch.randn(num_tokens, model_dim, dtype=torch.bfloat16, device="cuda")
+w1_gate = torch.randn(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda")
+w1_up = torch.randn(num_experts, inter_dim, model_dim, dtype=torch.bfloat16, device="cuda")
+w2 = torch.randn(num_experts, model_dim, inter_dim, dtype=torch.bfloat16, device="cuda")
+router_logits = torch.randn(num_tokens, num_experts, device="cuda")
 
 hidden_states_fp8 = hidden_states.to(fp8)
 w1_gate_fp8 = w1_gate.to(fp8)
 w1_up_fp8 = w1_up.to(fp8)
 w1_fp8 = torch.concat((w1_gate_fp8, w1_up_fp8), dim=1)
 # CK reuqires B in MFMA-shuffled layout
-w1_fp8_aiter = shuffle_weight(w1_fp8, layout=(16, 32))
+w1_fp8_aiter = shuffle_weight(w1_fp8, layout=(16,32))
 w2_fp8 = w2.to(fp8)
 
 topk_weights, topk_ids = torch.topk(router_logits.softmax(dim=-1), k=topk, dim=-1)
@@ -120,26 +113,24 @@ torch.cuda.synchronize()
 out_ref = torch.empty((num_tokens * topk, inter_dim), dtype=torch.bfloat16, device="cuda")
 out_test = torch.empty((num_tokens * topk, inter_dim), dtype=torch.bfloat16, device="cuda")
 
-if debug:
-    a1_scale = torch.ones(num_tokens, 1, dtype=torch.float32, device="cuda")
-    w1_scale = torch.ones(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
-else:
-    a1_scale = torch.rand(num_tokens, 1, dtype=torch.float32, device="cuda")
-    w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
+a1_scale = torch.rand(num_tokens, 1, dtype=torch.float32, device="cuda")
+w1_scale = torch.rand(num_experts, 1, inter_dim * 2, dtype=torch.float32, device="cuda")
+a1_scale_1d = a1_scale.reshape((num_tokens))
+w1_scale_2d = w1_scale.reshape((num_experts, inter_dim * 2))
 
 interleaved = interleave_gate_up(w1_gate_fp8, w1_up_fp8, WEIGHT_SWIZZLE_GRANULARITY)
 
-# tk_kernel.call(
-#     hidden_states_fp8,
-#     a1_scale.reshape((num_tokens)),
-#     interleaved,
-#     w1_scale.reshape((num_experts, inter_dim * 2)),
-#     out_test,
-#     sorted_ids,
-#     sorted_expert_ids,
-#     num_valid_ids
-# )
-# torch.cuda.synchronize()
+tk_kernel.call(
+    hidden_states_fp8,
+    a1_scale_1d,
+    interleaved,
+    w1_scale_2d,
+    out_test,
+    sorted_ids,
+    sorted_expert_ids,
+    num_valid_ids
+)
+torch.cuda.synchronize()
 
 aiter.ck_moe_stage1_fwd(
     hidden_states=hidden_states_fp8,
@@ -160,66 +151,40 @@ aiter.ck_moe_stage1_fwd(
 )
 torch.cuda.synchronize()
 
-out_torch = moe_stage1_reference(
-    hidden_states_fp8,
-    a1_scale.reshape((num_tokens)),
-    w1_gate_fp8,
-    w1_up_fp8,
-    w1_scale.reshape((num_experts, inter_dim * 2)),
-    topk_ids,
-)
+# out_torch = moe_stage1_reference(
+#     hidden_states_fp8,
+#     a1_scale.reshape((num_tokens)),
+#     w1_gate_fp8,
+#     w1_up_fp8,
+#     w1_scale.reshape((num_experts, inter_dim * 2)),
+#     topk_ids,
+# )
 
 # print("out_test:\n", out_test)
-print("out_ref:\n", out_ref)
-print("out_torch:\n", out_torch)
+# print("out_ref:\n", out_ref)
+# print("out_torch:\n", out_torch)
 max_abs_err = (out_test.float() - out_ref.float()).abs().max().item()
 print("max abs err:", max_abs_err)
 print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
 
-max_abs_err = (out_torch.float() - out_ref.float()).abs().max().item()
-print("max abs err:", max_abs_err)
-print("allclose:", torch.allclose(out_torch.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
+# max_abs_err = (out_torch.float() - out_ref.float()).abs().max().item()
+# print("max abs err:", max_abs_err)
+# print("allclose:", torch.allclose(out_torch.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
 
 if perf_benchmark:
-    num_warmup, num_iters = 5, 100
-    for _ in range(num_warmup):
+    def run_tk():
         tk_kernel.call(
             hidden_states_fp8,
-            a1_scale.reshape((num_tokens)),
+            a1_scale_1d,
             interleaved,
-            w1_scale.reshape((num_experts, inter_dim * 2)),
+            w1_scale_2d,
             out_test,
             sorted_ids,
             sorted_expert_ids,
             num_valid_ids
         )
-    torch.cuda.synchronize()
 
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    torch.cuda.synchronize()
-    start.record()
-    for _ in range(num_iters):
-        tk_kernel.call(
-            hidden_states_fp8,
-            a1_scale.reshape((num_tokens)),
-            interleaved,
-            w1_scale.reshape((num_experts, inter_dim * 2)),
-            out_test,
-            sorted_ids,
-            sorted_expert_ids,
-            num_valid_ids
-        )
-    end.record()
-    torch.cuda.synchronize()
-    avg = start.elapsed_time(end) / num_iters
-    print("TK perf.: ", avg)
-
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-    torch.cuda.synchronize()
-    start.record()
-    for _ in range(num_iters):
+    def run_aiter():
         aiter.ck_moe_stage1_fwd(
             hidden_states=hidden_states_fp8,
             w1=w1_fp8_aiter,
@@ -237,7 +202,42 @@ if perf_benchmark:
             quant_type=aiter.QuantType.per_Token,
             activation=aiter.ActivationType.Silu
         )
-    end.record()
-    torch.cuda.synchronize()
-    avg = start.elapsed_time(end) / num_iters
-    print("AITER perf.: ", avg)
+
+    def time_once(fn, num_warmup=5, num_iters=100):
+        for _ in range(num_warmup):
+            fn()
+        torch.cuda.synchronize()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for _ in range(num_iters):
+            fn()
+        end.record()
+        torch.cuda.synchronize()
+        return start.elapsed_time(end) / num_iters
+
+    def report(name, times):
+        print(
+            f"{name} perf. (ms): "
+            f"min={min(times):.5f} "
+            f"median={statistics.median(times):.5f} "
+            f"mean={statistics.fmean(times):.5f} "
+            f"std={statistics.pstdev(times) if len(times) > 1 else 0.0:.5f} "
+            f"(n={len(times)})"
+        )
+
+    num_trials = 20
+    time_once(run_tk, num_warmup=10, num_iters=1)
+    time_once(run_aiter, num_warmup=10, num_iters=1)
+
+    tk_times, aiter_times = [], []
+    for t in range(num_trials):
+        if t % 2 == 0:
+            tk_times.append(time_once(run_tk))
+            aiter_times.append(time_once(run_aiter))
+        else:
+            aiter_times.append(time_once(run_aiter))
+            tk_times.append(time_once(run_tk))
+
+    report("TK", tk_times)
+    report("AITER", aiter_times)
