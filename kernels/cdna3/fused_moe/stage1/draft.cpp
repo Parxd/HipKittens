@@ -61,10 +61,8 @@ void kernel(const moe_stage1_globals g) {
 
     using a_st = st<fp8e4m3, BLOCK_M, BLOCK_K>;
     using b_st = st<fp8e4m3, BLOCK_N, BLOCK_K>;
-    auto (&As0) = al.allocate<a_st>();
-    auto (&As1) = al.allocate<a_st>();
-    auto (&Bs0) = al.allocate<b_st>();
-    auto (&Bs1) = al.allocate<b_st>();
+    auto (&As)[2] = al.allocate<a_st, 2>();
+    auto (&Bs)[2] = al.allocate<b_st, 2>();
     auto (&sf_A) = al.allocate<sv_fl<BLOCK_M>>();
     auto (&sf_gate) = al.allocate<sv_fl<WEIGHT_SWIZZLE_GRANULARITY>>();
     auto (&sf_up) = al.allocate<sv_fl<WEIGHT_SWIZZLE_GRANULARITY>>();
@@ -104,10 +102,13 @@ void kernel(const moe_stage1_globals g) {
         float4 a_buf[2][BUFFER_SIZE_A];
         float4 b_buf[2][BUFFER_SIZE_B];
 
-        gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As0);
+        int lds_idx = 0;
+        int reg_idx = 1;
+
+        gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As[lds_idx]);
         for (int i = 0; i < 2; i++) { zero(accum[i]); }
-        gather_load<NUM_THREADS>(As0, g.A, {0, 0, output_m, 0}, tokens);
-        G::load(Bs0, g.B, {0, expert, output_n, 0});
+        gather_load<NUM_THREADS>(As[lds_idx], g.A, {0, 0, output_m, 0}, tokens);
+        G::load(Bs[lds_idx], g.B, {0, expert, output_n, 0});
 
         auto prefetch = [&](int k_tile, float4* a_dst, float4* b_dst) {
             load_global_to_register_buffer<2, false, NUM_THREADS>(b_dst, BUFFER_SIZE_B, g.B, {0, expert, output_n, k_tile}, Bs0);
@@ -139,31 +140,47 @@ void kernel(const moe_stage1_globals g) {
             mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
             __builtin_amdgcn_sched_barrier(0);
         };
-
-        prefetch(1, a_buf[1], b_buf[1]);
+        
+        prefetch(1, a_buf[reg_idx], b_buf[reg_idx]);
         __builtin_amdgcn_s_barrier();
-
-        for (int K_TILE = 0; K_TILE + 1 < k_iters; K_TILE += 2) {
-            if (K_TILE + 2 < k_iters) prefetch(K_TILE + 2, a_buf[0], b_buf[0]);
-            compute(As0, Bs0);
-            if (K_TILE + 1 < k_iters) commit(As1, Bs1, a_buf[1], b_buf[1]);
+        __builtin_amdgcn_sched_barrier(0);
+        
+        #pragma unroll 2
+        for (int K_TILE = 0; K_TILE + 2 < k_iters; ++K_TILE) {
+            prefetch(K_TILE + 2, a_buf[reg_idx^1], b_buf[reg_idx^1]);
+            compute(As[lds_idx], Bs[lds_idx]);
+            asm volatile("s_waitcnt vmcnt(3)");
+            __builtin_amdgcn_sched_barrier(0);
+            
+            commit(As[lds_idx^1], Bs[lds_idx^1], a_buf[reg_idx], b_buf[reg_idx]);
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            if (K_TILE + 3 < k_iters) prefetch(K_TILE + 3, a_buf[1], b_buf[1]);
-            compute(As1, Bs1);
-            if (K_TILE + 2 < k_iters) commit(As0, Bs0, a_buf[0], b_buf[0]);
-            asm volatile("s_waitcnt lgkmcnt(0)");
-            __builtin_amdgcn_s_barrier();
-            __builtin_amdgcn_sched_barrier(0);
+            lds_idx^=1; reg_idx^=1;
         }
+        // k_iter - 2
+        compute(As[lds_idx], Bs[lds_idx]);
+        asm volatile("s_waitcnt vmcnt(0)");
+        __builtin_amdgcn_sched_barrier(0);
+        
+        commit(As[lds_idx^1], Bs[lds_idx^1], a_buf[reg_idx], b_buf[reg_idx]);
+        asm volatile("s_waitcnt lgkmcnt(0)");
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
+        lds_idx^=1; reg_idx^=1;
+
+        // k_iter - 1
         if (warp_id == 0) {
             gather_f32_sf_a<WARP_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
             load(sf_gate, g.sf_B, {expert, output_n});
             load(sf_up, g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
         }
+        compute(As[lds_idx], Bs[lds_idx]);
         __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
         load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
         load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
         load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
