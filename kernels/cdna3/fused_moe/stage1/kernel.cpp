@@ -23,9 +23,6 @@ constexpr int REG_N = 16;
 constexpr int REG_K = 64;
 constexpr int NUM_THREADS = NUM_WARPS * WARP_THREADS;
 constexpr int WEIGHT_SWIZZLE_GRANULARITY = BLOCK_N / 2;
-// Double-buffered LDS: two copies of the A and B tiles so the producer can write
-// the next K-tile while the consumer reads the current one (removes the barrier
-// bubble). Costs 2x the tile SMEM -> occupancy drops to 2 blocks/CU.
 constexpr size_t SMEM_BYTES = 2 * (BLOCK_M * BLOCK_K + BLOCK_N * BLOCK_K) * sizeof(fp8e4m3) + 
                             ((BLOCK_M + WEIGHT_SWIZZLE_GRANULARITY * 2) * sizeof(float));
 constexpr int OCCUPANCY = 2;
@@ -85,8 +82,8 @@ void kernel(const moe_stage1_globals g) {
     constexpr int num_n_tiles = 2 * D_INTER / BLOCK_N;
     const int total_tiles = num_valid_m_tiles * num_n_tiles;
     const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
-    const int chunk_size = CUS_PER_XCD * OCCUPANCY;
-    const int window_size = CUS_PER_XCD * OCCUPANCY;
+    const int chunk_size = 1;
+    const int window_size = 1;
     const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
     for (int tile = 0; tile < num_tiles_per_cu && base_bidx + tile * gridDim.x < total_tiles; ++tile) {
@@ -104,40 +101,35 @@ void kernel(const moe_stage1_globals g) {
         constexpr int BUFFER_SIZE_A = (BLOCK_M * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
         constexpr int BUFFER_SIZE_B = (BLOCK_N * BLOCK_K + BYTES_PER_MEMCPY - 1) / BYTES_PER_MEMCPY;
         int tokens[BUFFER_SIZE_A];
-        // Register staging for the 2-ahead prefetch (indexed by K-tile parity).
         float4 a_buf[2][BUFFER_SIZE_A];
         float4 b_buf[2][BUFFER_SIZE_B];
 
         gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As0);
         for (int i = 0; i < 2; i++) { zero(accum[i]); }
-        gather_load<NUM_THREADS>(As0, g.A, {0, 0, output_m, 0}, tokens);   // tile 0 -> LDS buf 0
+        gather_load<NUM_THREADS>(As0, g.A, {0, 0, output_m, 0}, tokens);
         G::load(Bs0, g.B, {0, expert, output_n, 0});
 
-        // Issue the global loads for K-tile `k_tile` into the given register buffers.
         auto prefetch = [&](int k_tile, float4* a_dst, float4* b_dst) {
             load_global_to_register_buffer<2, false, NUM_THREADS>(b_dst, BUFFER_SIZE_B, g.B, {0, expert, output_n, k_tile}, Bs0);
             gather_load_global_to_register_buffer<NUM_THREADS>(a_dst, BUFFER_SIZE_A, g.A, {0, 0, output_m, k_tile}, tokens, As0);
         };
-        // Drain register buffers into the given (alternate) LDS buffer.
         auto commit = [&](a_st& As_d, b_st& Bs_d, const float4* a_src, const float4* b_src) {
             store_register_buffer_to_shared<NUM_THREADS>(As_d, a_src);
             store_register_buffer_to_shared<NUM_THREADS>(Bs_d, b_src);
         };
-        // Consume the current LDS buffer: load register tiles and run the four MMAs.
         auto compute = [&](a_st& As_c, b_st& Bs_c) {
             load(a_tiles[0], subtile_inplace<REG_M, REG_K>(As_c, {warp_row, 0}));
             load(b_tiles[0], subtile_inplace<REG_N, REG_K>(Bs_c, {warp_col, 0}));
             load(b_tiles[1], subtile_inplace<REG_N, REG_K>(Bs_c, {warp_col + 2, 0}));
-            __builtin_amdgcn_sched_barrier(0);
 
-            asm volatile("s_waitcnt lgkmcnt(0)");
-            __builtin_amdgcn_sched_barrier(0);
             load(a_tiles[1], subtile_inplace<REG_M, REG_K>(As_c, {warp_row, 1}));
-            mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
-            __builtin_amdgcn_sched_barrier(0);
-
             load(b_tiles[2], subtile_inplace<REG_N, REG_K>(Bs_c, {warp_col, 1}));
             load(b_tiles[3], subtile_inplace<REG_N, REG_K>(Bs_c, {warp_col + 2, 1}));
+            __builtin_amdgcn_sched_barrier(0);
+
+            asm volatile("s_waitcnt lgkmcnt(3)");
+            __builtin_amdgcn_sched_barrier(0);
+            mma_ABt(accum[0], a_tiles[0], b_tiles[0], accum[0]);
             mma_ABt(accum[1], a_tiles[0], b_tiles[1], accum[1]);
             __builtin_amdgcn_sched_barrier(0);
 
@@ -148,19 +140,10 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_sched_barrier(0);
         };
 
-        // Prologue: LDS buf 0 holds tile 0; stage tile 1 into register buffer 1.
         prefetch(1, a_buf[1], b_buf[1]);
         __builtin_amdgcn_s_barrier();
 
-        // Double-buffered LDS pipeline. Unrolled by two so both the LDS buffer and
-        // the register ping-pong indices are compile-time constants. Each iteration:
-        //   - prefetch tile K+2 into registers (2-ahead, hides HBM latency),
-        //   - compute tile K from the current LDS buffer,
-        //   - drain tile K+1 (loaded last iter) into the ALTERNATE LDS buffer,
-        //   - single barrier (vs. two in the single-buffered version).
-        int K_TILE = 0;
-        for (; K_TILE + 1 < k_iters; K_TILE += 2) {
-            // Even: LDS buf 0 = tile K; write tile K+1 into buf 1.
+        for (int K_TILE = 0; K_TILE + 1 < k_iters; K_TILE += 2) {
             if (K_TILE + 2 < k_iters) prefetch(K_TILE + 2, a_buf[0], b_buf[0]);
             compute(As0, Bs0);
             if (K_TILE + 1 < k_iters) commit(As1, Bs1, a_buf[1], b_buf[1]);
@@ -168,7 +151,6 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            // Odd: LDS buf 1 = tile K+1; write tile K+2 into buf 0.
             if (K_TILE + 3 < k_iters) prefetch(K_TILE + 3, a_buf[1], b_buf[1]);
             compute(As1, Bs1);
             if (K_TILE + 2 < k_iters) commit(As0, Bs0, a_buf[0], b_buf[0]);
@@ -200,9 +182,10 @@ void kernel(const moe_stage1_globals g) {
 void call(moe_stage1_globals g) {
     unsigned long mem_size = g.dynamic_shared_memory();
     hipFuncSetAttribute((void*)kernel, hipFuncAttributeMaxDynamicSharedMemorySize, mem_size);
-    hipDeviceProp_t prop;
-    hipGetDeviceProperties(&prop, 0);
-    auto grid_dim = dim3(OCCUPANCY * prop.multiProcessorCount);
+    // hipDeviceProp_t prop;
+    // hipGetDeviceProperties(&prop, 0);
+    // auto grid_dim = dim3(OCCUPANCY * multiProcessorCount);
+    auto grid_dim = dim3(OCCUPANCY * 304);
     kernel<<<grid_dim, g.block(), mem_size, g.stream>>>(g);
 }
 
