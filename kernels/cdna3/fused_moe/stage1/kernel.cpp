@@ -1,7 +1,5 @@
-#include "cdna3/common/util.cuh"
 #include "kittens.cuh" 
 #include "pyutils/pyutils.cuh"
-#include <hip/hip_runtime.h>
 #include "utils.cpp"
 
 using namespace kittens;
@@ -61,10 +59,8 @@ void kernel(const moe_stage1_globals g) {
 
     using a_st = st<fp8e4m3, BLOCK_M, BLOCK_K>;
     using b_st = st<fp8e4m3, BLOCK_N, BLOCK_K>;
-    auto (&As0) = al.allocate<a_st>();
-    auto (&As1) = al.allocate<a_st>();
-    auto (&Bs0) = al.allocate<b_st>();
-    auto (&Bs1) = al.allocate<b_st>();
+    auto (&As)[2] = al.allocate<a_st, 2>();
+    auto (&Bs)[2] = al.allocate<b_st, 2>();
     auto (&sf_A) = al.allocate<sv_fl<BLOCK_M>>();
     auto (&sf_gate) = al.allocate<sv_fl<WEIGHT_SWIZZLE_GRANULARITY>>();
     auto (&sf_up) = al.allocate<sv_fl<WEIGHT_SWIZZLE_GRANULARITY>>();
@@ -82,12 +78,11 @@ void kernel(const moe_stage1_globals g) {
     constexpr int num_n_tiles = 2 * D_INTER / BLOCK_N;
     const int total_tiles = num_valid_m_tiles * num_n_tiles;
     const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
-    const int chunk_size = 1;
+    const int chunk_size = CUS_PER_XCD;
     const int window_size = 1;
     const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
     for (int tile = 0; tile < num_tiles_per_cu && base_bidx + tile * gridDim.x < total_tiles; ++tile) {
-
         const int remap_bidx = base_bidx + tile * gridDim.x;
         int num_wgid_in_group = window_size * num_n_tiles;
         int group_id = remap_bidx / num_wgid_in_group;
@@ -104,14 +99,14 @@ void kernel(const moe_stage1_globals g) {
         float4 a_buf[2][BUFFER_SIZE_A];
         float4 b_buf[2][BUFFER_SIZE_B];
 
-        gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As0);
+        gather_tokens<NUM_THREADS>(tokens, g.sorted_token_ids, {0, 0, output_m, 0}, As[0]);
         for (int i = 0; i < 2; i++) { zero(accum[i]); }
-        gather_load<NUM_THREADS>(As0, g.A, {0, 0, output_m, 0}, tokens);
-        G::load(Bs0, g.B, {0, expert, output_n, 0});
+        gather_load<NUM_THREADS>(As[0], g.A, {0, 0, output_m, 0}, tokens);
+        G::load(Bs[0], g.B, {0, expert, output_n, 0});
 
         auto prefetch = [&](int k_tile, float4* a_dst, float4* b_dst) {
-            load_global_to_register_buffer<2, false, NUM_THREADS>(b_dst, BUFFER_SIZE_B, g.B, {0, expert, output_n, k_tile}, Bs0);
-            gather_load_global_to_register_buffer<NUM_THREADS>(a_dst, BUFFER_SIZE_A, g.A, {0, 0, output_m, k_tile}, tokens, As0);
+            load_global_to_register_buffer<2, false, NUM_THREADS>(b_dst, BUFFER_SIZE_B, g.B, {0, expert, output_n, k_tile}, Bs[0]);
+            gather_load_global_to_register_buffer<NUM_THREADS>(a_dst, BUFFER_SIZE_A, g.A, {0, 0, output_m, k_tile}, tokens, As[0]);
         };
         auto commit = [&](a_st& As_d, b_st& Bs_d, const float4* a_src, const float4* b_src) {
             store_register_buffer_to_shared<NUM_THREADS>(As_d, a_src);
@@ -137,36 +132,49 @@ void kernel(const moe_stage1_globals g) {
             __builtin_amdgcn_sched_barrier(0);
             mma_ABt(accum[0], a_tiles[1], b_tiles[2], accum[0]);
             mma_ABt(accum[1], a_tiles[1], b_tiles[3], accum[1]);
-            __builtin_amdgcn_sched_barrier(0);
+            // __builtin_amdgcn_sched_barrier(0);  // no compiler barrier here to overlap w/ commit for LDS[K_TILE + 1]
         };
-
+        
         prefetch(1, a_buf[1], b_buf[1]);
         __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
 
-        for (int K_TILE = 0; K_TILE + 1 < k_iters; K_TILE += 2) {
-            if (K_TILE + 2 < k_iters) prefetch(K_TILE + 2, a_buf[0], b_buf[0]);
-            compute(As0, Bs0);
-            if (K_TILE + 1 < k_iters) commit(As1, Bs1, a_buf[1], b_buf[1]);
+        static_assert(k_iters % 2 == 0);
+        for (int K_TILE = 0; K_TILE + 2 < k_iters; K_TILE += 2) {
+            prefetch(K_TILE + 2, a_buf[0], b_buf[0]);
+            compute(As[0], Bs[0]);
+            commit(As[1], Bs[1], a_buf[1], b_buf[1]);
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
 
-            if (K_TILE + 3 < k_iters) prefetch(K_TILE + 3, a_buf[1], b_buf[1]);
-            compute(As1, Bs1);
-            if (K_TILE + 2 < k_iters) commit(As0, Bs0, a_buf[0], b_buf[0]);
+            prefetch(K_TILE + 3, a_buf[1], b_buf[1]);
+            compute(As[1], Bs[1]);
+            commit(As[0], Bs[0], a_buf[0], b_buf[0]);
             asm volatile("s_waitcnt lgkmcnt(0)");
             __builtin_amdgcn_s_barrier();
             __builtin_amdgcn_sched_barrier(0);
         }
-        if (warp_id == 0) {
-            gather_f32_sf_a<WARP_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
-            load(sf_gate, g.sf_B, {expert, output_n});
-            load(sf_up, g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
-        }
-        __builtin_amdgcn_s_barrier();
+        // k_iter - 2
+        // not ideal, but seems to marginally improves perf.
+        if      (warp_id == 0) gather_f32_sf_a<WARP_THREADS>(sf_A, g.sf_A, {output_m}, g.sorted_token_ids);
+        else if (warp_id == 1) load(sf_gate, g.sf_B, {expert, output_n});
+        else if (warp_id == 2) load(sf_up,   g.sf_B, {expert, output_n + (D_INTER / WEIGHT_SWIZZLE_GRANULARITY)});
+        __builtin_amdgcn_sched_barrier(0);
+
+        compute(As[0], Bs[0]);
+        commit(As[1], Bs[1], a_buf[1], b_buf[1]);
+        asm volatile("s_waitcnt lgkmcnt(0)");
+        __builtin_amdgcn_s_barrier();  // for K-1 LDS tile & scale factors
+        __builtin_amdgcn_sched_barrier(0);
+
+        // k_iter - 1
         load_sv_to_rv(reg_sf_A, subvec_inplace<REG_M>(sf_A, warp_row));
         load_sv_to_rv(reg_sf_W[0], subvec_inplace<REG_N>(sf_gate, warp_col));
         load_sv_to_rv(reg_sf_W[1], subvec_inplace<REG_N>(sf_up, warp_col));
+        compute(As[1], Bs[1]);
+        __builtin_amdgcn_sched_barrier(0);
+
         apply_row_sf(accum[0], accum[0], reg_sf_A);
         apply_col_sf(accum[0], accum[0], reg_sf_W[0]);
         apply_row_sf(accum[1], accum[1], reg_sf_A);

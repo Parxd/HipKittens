@@ -13,7 +13,7 @@ inter_dim = 2048
 model_dim = 7168
 topk = 8
 
-num_tokens = 16
+num_tokens = 128
 num_experts = 256
 block_m = 32
 block_n = 64
@@ -166,10 +166,6 @@ torch.cuda.synchronize()
 max_abs_err = (out_test.float() - out_ref.float()).abs().max().item()
 print("max abs err:", max_abs_err)
 print("allclose:", torch.allclose(out_test.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
-
-# max_abs_err = (out_torch.float() - out_ref.float()).abs().max().item()
-# print("max abs err:", max_abs_err)
-# print("allclose:", torch.allclose(out_torch.float(), out_ref.float(), atol=1e-2, rtol=1e-2))
 
 if perf_benchmark:
     def run_tk():
