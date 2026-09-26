@@ -78,7 +78,7 @@ void kernel(const moe_stage1_globals g) {
     constexpr int num_n_tiles = 2 * D_INTER / BLOCK_N;
     const int total_tiles = num_valid_m_tiles * num_n_tiles;
     const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
-    const int chunk_size = CUS_PER_XCD;
+    const int chunk_size = 304;
     const int window_size = 1;
     const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
@@ -105,7 +105,7 @@ void kernel(const moe_stage1_globals g) {
         G::load(Bs[0], g.B, {0, expert, output_n, 0});
 
         auto prefetch = [&](int k_tile, float4* a_dst, float4* b_dst) {
-            load_global_to_register_buffer<2, false, NUM_THREADS>(b_dst, BUFFER_SIZE_B, g.B, {0, expert, output_n, k_tile}, Bs[0]);
+            load_global_to_register_buffer_nt<2, false, NUM_THREADS>(b_dst, BUFFER_SIZE_B, g.B, {0, expert, output_n, k_tile}, Bs[0]);
             gather_load_global_to_register_buffer<NUM_THREADS>(a_dst, BUFFER_SIZE_A, g.A, {0, 0, output_m, k_tile}, tokens, As[0]);
         };
         auto commit = [&](a_st& As_d, b_st& Bs_d, const float4* a_src, const float4* b_src) {

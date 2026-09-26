@@ -185,6 +185,53 @@ __device__ inline void gather_load_global_to_register_buffer(
 }
 
 /**
+ * @brief Near-exact copy from HK's global_to_shared; only difference is we're using non-temporal loads here
+ */
+template<int axis=2, bool assume_aligned=false,
+        int N_THREADS = WARP_THREADS,
+        ducks::st::all ST, 
+        ducks::gl::all GL,
+        ducks::coord::tile COORD = coord<ST>
+>
+__device__ inline void load_global_to_register_buffer_nt(float4* reg_buffer, const int buffer_size, const GL& src, const COORD& idx, const ST& dst_template) {
+    using T = typename ST::dtype;
+    constexpr int elem_per_memcpy = sizeof(float4)/sizeof(T);
+    constexpr int memcpy_per_row = ST::cols / elem_per_memcpy;
+    constexpr int total_chunks = (ST::rows * ST::cols) / elem_per_memcpy;
+    constexpr int total_calls = (total_chunks + N_THREADS - 1) / N_THREADS;
+    constexpr int small_calls = 16;
+    const int big_calls = (total_calls + small_calls - 1) / small_calls;
+
+    const int row_stride = src.template stride<axis>();
+    const int row_stride_bytes = row_stride * sizeof(T);
+    coord<> unit_coord = idx.template unit_coord<axis, 3>();
+    T* base_ptr = (T*)&src[unit_coord];  // global memory pointer
+    const int laneid = threadIdx.x % N_THREADS;
+
+    // buffer resource
+    const int total_bytes = row_stride * ST::rows * sizeof(T);
+    i32x4 srsrc = make_srsrc(base_ptr, total_bytes, row_stride_bytes);
+
+    int buf_idx = 0;
+    for (int i = 0; i < big_calls && buf_idx < buffer_size; ++i) {
+        const int offset = i * small_calls;
+        #pragma unroll
+        for (int j = 0; j < small_calls; ++j) {
+            const int chunk_idx = (offset + j) * N_THREADS + laneid;
+            if (chunk_idx < total_chunks && buf_idx < buffer_size) {
+                int row = chunk_idx / memcpy_per_row;
+                int col = (chunk_idx % memcpy_per_row) * elem_per_memcpy;
+                int flat_offset = row * row_stride + col;
+                int byte_offset = flat_offset * sizeof(T);
+                __uint128_t raw = llvm_amdgcn_raw_buffer_load_b128(srsrc, byte_offset, 0, 0b10);
+                reg_buffer[buf_idx] = *reinterpret_cast<float4*>(&raw);
+                buf_idx++;
+            }
+        }
+    }
+}
+
+/**
  * @brief Gathers PT (per-token) f32 scale factors.
  *
  * @tparam N_THREADS  The number of threads used.
