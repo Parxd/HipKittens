@@ -78,7 +78,7 @@ void kernel(const moe_stage1_globals g) {
     constexpr int num_n_tiles = 2 * D_INTER / BLOCK_N;
     const int total_tiles = num_valid_m_tiles * num_n_tiles;
     const int num_tiles_per_cu = ceil_div(total_tiles, gridDim.x);
-    const int chunk_size = 304;
+    const int chunk_size = 76;
     const int window_size = 1;
     const int base_bidx = chiplet_transform_chunked(blockIdx.x, gridDim.x, NUM_XCDS, chunk_size);
 
@@ -139,7 +139,7 @@ void kernel(const moe_stage1_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        static_assert(k_iters % 2 == 0);
+        static_assert(k_iters % 2 == 0, "k-iters (model dim. / BLOCK K) must be even");
         for (int K_TILE = 0; K_TILE + 2 < k_iters; K_TILE += 2) {
             prefetch(K_TILE + 2, a_buf[0], b_buf[0]);
             compute(As[0], Bs[0]);

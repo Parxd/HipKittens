@@ -2,6 +2,8 @@
 
 using namespace kittens;
 
+constexpr int NT_LOAD_BITS = 0b10;
+
 extern "C" __device__ inline float
 llvm_amdgcn_raw_buffer_load_f32(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
     __asm("llvm.amdgcn.raw.buffer.load.f32");
@@ -185,7 +187,7 @@ __device__ inline void gather_load_global_to_register_buffer(
 }
 
 /**
- * @brief Near-exact copy from HK's global_to_shared; only difference is we're using non-temporal loads here
+ * @brief Near-exact copy from HK's global_to_shared; only diff. is we're using non-temporal loads here
  */
 template<int axis=2, bool assume_aligned=false,
         int N_THREADS = WARP_THREADS,
@@ -223,7 +225,7 @@ __device__ inline void load_global_to_register_buffer_nt(float4* reg_buffer, con
                 int col = (chunk_idx % memcpy_per_row) * elem_per_memcpy;
                 int flat_offset = row * row_stride + col;
                 int byte_offset = flat_offset * sizeof(T);
-                __uint128_t raw = llvm_amdgcn_raw_buffer_load_b128(srsrc, byte_offset, 0, 0b10);
+                __uint128_t raw = llvm_amdgcn_raw_buffer_load_b128(srsrc, byte_offset, 0, NT_LOAD_BITS);
                 reg_buffer[buf_idx] = *reinterpret_cast<float4*>(&raw);
                 buf_idx++;
             }
@@ -381,8 +383,7 @@ __device__ static inline void apply_col_sf(T& dst, const T &src, const V &col_va
 
 /**
  * @brief Scatters a warp's accumulator tile to the routed output rows using
- *        non-temporal (streaming) global stores so the write-once results bypass
- *        L2 residency and avoid evicting reused weights/activations.
+ *        non-temporal global stores
  *
  * @tparam TOP_K    Mixture-of-Experts Top-K parameter
  * @param dst[out]  Destination global tile
@@ -430,7 +431,7 @@ __device__  inline void scatter_store(
 
                 if (token_id != sentinel) {
                     uint16_t bits = __builtin_bit_cast(uint16_t, __float2bfloat16(flat[k]));
-                    llvm_amdgcn_raw_buffer_store_b16(bits, srsrc, flat_offset * sizeof(T), 0, 0b10);
+                    llvm_amdgcn_raw_buffer_store_b16(bits, srsrc, flat_offset * sizeof(T), 0, NT_LOAD_BITS);
                 }
             }
         }
