@@ -147,7 +147,7 @@ aiter.ck_moe_stage1_fwd(
     block_m=32,
     sorted_weights=None,
     quant_type=aiter.QuantType.per_Token,
-    activation=aiter.ActivationType.Silu  # AITER swiglu uses weird GPT-OSS specific implementation
+    activation=aiter.ActivationType.Silu
 )
 torch.cuda.synchronize()
 
